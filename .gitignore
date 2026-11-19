@@ -1,4 +1,3 @@
-# big or re-creatable files
 data/*.csv
 data/*.parquet
 data/boundaries/
