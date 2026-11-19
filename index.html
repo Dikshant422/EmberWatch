@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EmberWatch: fire detections, screened</title>
+
+  <!-- Helix UI fonts (Fontshare). Falls back to system fonts if offline. -->
+  <link rel="preconnect" href="https://api.fontshare.com">
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=clash-grotesk@500,600&f[]=satoshi@400,500,700&display=swap">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>EmberWatch</h1>
+  </div>
+</header>
+
+<div id="status" class="status" role="status" hidden></div>
+
+<section class="controls" aria-label="Choose a region">
+  <label class="field">
+    <span>Country</span>
+    <select id="sel-country" disabled><option>Loading…</option></select>
+  </label>
+  <label class="field">
+    <span>State or province</span>
+    <select id="sel-state" disabled><option>Choose a country first</option></select>
+  </label>
+  <p class="selection" id="selection-readout" aria-live="polite"></p>
+</section>
+
+<main class="grid">
+  <section class="panel map-panel" aria-label="Map of fire detections">
+    <div id="map" role="img" aria-label="Map of fire detections on a 0.25 degree grid"></div>
+    <div class="map-legend" id="map-legend"></div>
+  </section>
+
+  <aside class="panel summary-panel" id="summary-panel" aria-label="Summary">
+    <h2>Summary</h2>
+    <div id="summary-body"><p class="muted">Pending piece 5.</p></div>
+  </aside>
+
+  <section class="panel table-panel" aria-label="Priority table">
+    <h2 id="table-title">Priority table</h2>
+    <div id="table-body"><p class="muted">Pending piece 3.</p></div>
+  </section>
+
+  <section class="panel chart-panel" aria-label="Daily fire detections">
+    <h2>Daily fire detections</h2>
+    <div id="chart-body"><p class="muted">Pending piece 4.</p></div>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

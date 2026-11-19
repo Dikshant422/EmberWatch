@@ -1,0 +1,10 @@
+# big or re-creatable files
+data/*.csv
+data/*.parquet
+data/boundaries/
+data/raw_points.png
+__pycache__/
+.venv/
+.vscode/
+*.part
+*.tmp
