@@ -23,15 +23,56 @@
 
 <div id="status" class="status" role="status" hidden></div>
 
-<section class="controls" aria-label="Choose a region">
-  <label class="field">
-    <span>Country</span>
-    <select id="sel-country" disabled><option>Loading…</option></select>
-  </label>
-  <label class="field">
-    <span>State or province</span>
-    <select id="sel-state" disabled><option>Choose a country first</option></select>
-  </label>
+<section class="controls" aria-label="Screening controls">
+  <div class="mode-bar">
+    <div class="seg" role="group" aria-label="Screening mode">
+      <span class="seg-label">Mode</span>
+      <button type="button" id="btn-mode-region" class="mode-btn" aria-pressed="true">Region</button>
+      <button type="button" id="btn-mode-proximity" class="mode-btn" aria-pressed="false">Proximity Check</button>
+    </div>
+  </div>
+
+  <div id="region-controls" class="mode-group">
+    <label class="field">
+      <span>Country</span>
+      <select id="sel-country" disabled><option>Loading…</option></select>
+    </label>
+    <label class="field">
+      <span>State or province</span>
+      <select id="sel-state" disabled><option>Choose a country first</option></select>
+    </label>
+  </div>
+
+  <div id="proximity-controls" class="mode-group" hidden>
+    <div class="seg" role="group" aria-label="Proximity type">
+      <span class="seg-label">Target</span>
+      <button type="button" id="btn-submode-point" aria-pressed="true">Point radius</button>
+      <button type="button" id="btn-submode-route" aria-pressed="false">Route corridor</button>
+    </div>
+
+    <label class="field">
+      <span id="label-buffer">Radius</span>
+      <select id="sel-buffer">
+        <option value="10">10 km</option>
+        <option value="25" selected>25 km</option>
+        <option value="50">50 km</option>
+      </select>
+    </label>
+
+    <div class="field search-field">
+      <span>Find place (OSM)</span>
+      <div class="search-wrap">
+        <input type="text" id="input-place-search" placeholder="e.g. Nagpur or Bhopal" autocomplete="off">
+        <button type="button" id="btn-place-search" class="btn-action">Search</button>
+      </div>
+    </div>
+
+    <div class="action-buttons">
+      <button type="button" id="btn-snap-road" class="btn-action snap-btn" hidden title="Snap route to highways via OSRM">Snap to road</button>
+      <button type="button" id="btn-clear-proximity" class="btn-action secondary">Clear</button>
+    </div>
+  </div>
+
   <p class="selection" id="selection-readout" aria-live="polite"></p>
 </section>
 
@@ -60,5 +101,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="app.js"></script>
+<script src="proximity.js"></script>
 </body>
 </html>

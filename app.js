@@ -461,7 +461,7 @@
     $("sel-state").addEventListener("change", onState);
     wireTable();
     renderSelection();
-    window.EW = { S, nf, $, currentRegion, get map() { return map; } };   // shared with later pieces + tests
+    window.EW = { S, nf, $, currentRegion, frpColour, drawCells, get map() { return map; }, get canvas() { return canvas; }, get layer() { return layer; }, set layer(l) { layer = l; } };   // shared with later pieces + tests
     document.dispatchEvent(new Event("ew-ready"));
   }
   init();
