@@ -17,20 +17,28 @@
 
 <header class="top">
   <div class="brand">
-    <h1>EmberWatch</h1>
+    <div class="brand-title-wrap">
+      <h1>EmberWatch</h1>
+      <span class="brand-badge">Decision Screening</span>
+    </div>
+    <div class="brand-meta">
+      <span class="meta-pill"><span class="live-dot"></span> 7-Day VIIRS</span>
+      <span class="meta-pill">SDG 15 · 13 · 11</span>
+    </div>
   </div>
 </header>
 
 <div id="status" class="status" role="status" hidden></div>
 
 <section class="controls" aria-label="Screening controls">
-  <div class="mode-bar">
-    <div class="seg" role="group" aria-label="Screening mode">
-      <span class="seg-label">Mode</span>
-      <button type="button" id="btn-mode-region" class="mode-btn" aria-pressed="true">Region</button>
-      <button type="button" id="btn-mode-proximity" class="mode-btn" aria-pressed="false">Proximity Check</button>
+  <div class="controls-card">
+    <div class="mode-bar">
+      <div class="seg" role="group" aria-label="Screening mode">
+        <span class="seg-label">Mode</span>
+        <button type="button" id="btn-mode-region" class="mode-btn" aria-pressed="true">Region</button>
+        <button type="button" id="btn-mode-proximity" class="mode-btn" aria-pressed="false">Proximity Check</button>
+      </div>
     </div>
-  </div>
 
   <div id="region-controls" class="mode-group">
     <label class="field">
@@ -73,7 +81,8 @@
     </div>
   </div>
 
-  <p class="selection" id="selection-readout" aria-live="polite"></p>
+    <p class="selection" id="selection-readout" aria-live="polite"></p>
+  </div>
 </section>
 
 <main class="grid">

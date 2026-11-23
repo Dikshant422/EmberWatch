@@ -115,7 +115,7 @@
   // ---------- piece 2: map ----------
   // PERFORMANCE: cells.json has ~35k rows. One DOM marker per cell would freeze the page, so
   // every circle is drawn on a single <canvas> (L.canvas), and only the selection is drawn.
-  const EMBER = ["#B8800B", "#E7AB20", "#F08A2B", "#E2503C", "#FFF1C9"];  // extension, not in Helix
+  const EMBER = ["#F59E0B", "#FF7A59", "#EA4335", "#C5221F", "#7A0C22"];  // extension, not in Helix
   let map, canvas, layer, tip, frpBreaks = [];
   const WORLD = [[-52, -140], [72, 160]];
 
@@ -133,7 +133,7 @@
     if (S.countryGeo) {
       L.geoJSON(S.countryGeo, {
         pane: "land", renderer: L.canvas({ pane: "land" }), interactive: false,
-        style: { color: "#2F4A59", weight: 0.7, fillColor: "#132C3A", fillOpacity: 1 },
+        style: { color: "#D8C7B8", weight: 0.8, fillColor: "#EDE4DA", fillOpacity: 1 },
       }).addTo(map);
     }
     canvas = L.canvas({ padding: 0.5 });
@@ -192,11 +192,11 @@
     if (token !== borderToken) return;                 // selection changed while loading
     const add = (data, pane, style) => borderLayers.push(
       L.geoJSON(data, { pane, renderer: L.canvas({ pane }), interactive: false, style }).addTo(map));
-    if (a1) add(a1, "regions", { color: "#7FA3B3", weight: 0.9, fillColor: "#1D4152", fillOpacity: 1 });
+    if (a1) add(a1, "regions", { color: "#CBB7A6", weight: 0.9, fillColor: "#E5DAD0", fillOpacity: 1 });
     add(S.countryGeo.features.filter((f) => f.properties.id === iso), "outline",
-      { color: "#EDF4F7", weight: 1.5, opacity: 0.85, fill: false });
+      { color: "#2A221E", weight: 1.5, opacity: 0.7, fill: false });
     const st = stateId && a1 && a1.features.find((f) => f.properties.id === stateId);
-    if (st) add(st, "outline", { color: "#E7AB20", weight: 2.5, fillColor: "#E7AB20", fillOpacity: 0.08 });
+    if (st) add(st, "outline", { color: "#FF6F59", weight: 2.5, fillColor: "#FF6F59", fillOpacity: 0.12 });
   }
 
   function drawCells() {
@@ -354,7 +354,7 @@
 
     if (!chart) {
       body.innerHTML = '<p class="chart-sub" id="chart-sub"></p><div class="chart-box"><canvas id="chart" role="img"></canvas></div>';
-      Chart.defaults.color = "#AAC0CD";
+      Chart.defaults.color = "#6B5B54";
       Chart.defaults.font.family = '"Satoshi", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
     }
     $("chart-sub").textContent = name;
@@ -363,26 +363,27 @@
     const dash = (ctx) => (isPart(ctx.p1DataIndex) ? [6, 5] : undefined);
     const mk = (label, key, colour, axis, shape) => ({
       label, data: series.map((p) => p[key]), yAxisID: axis,
-      borderColor: colour, backgroundColor: colour, borderWidth: 2.5, tension: 0,
+      borderColor: colour, backgroundColor: colour, borderWidth: 2.5, tension: 0.1,
       pointStyle: shape, pointRadius: 5, pointHoverRadius: 7,
-      pointBackgroundColor: (c) => (isPart(c.dataIndex) ? "#142F3D" : colour),   // hollow = partial
+      pointBackgroundColor: (c) => (isPart(c.dataIndex) ? "#FFFFFF" : colour),   // hollow = partial
       pointBorderColor: colour, pointBorderWidth: 2,
       segment: { borderDash: dash },
     });
     const data = {
       labels: series.map((p, i) => (isPart(i) ? [p.date.slice(8), MON[+p.date.slice(5, 7) - 1], "partial"] : [p.date.slice(8), MON[+p.date.slice(5, 7) - 1]])),
       datasets: [
-        mk("Fire detections", "count", "#E7AB20", "yCount", "circle"),
-        mk("Total FRP (MW)", "frp", "#94C4E0", "yFrp", "rectRot"),
+        mk("Fire detections", "count", "#FF6F59", "yCount", "circle"),
+        mk("Total FRP (MW)", "frp", "#2A8382", "yFrp", "rectRot"),
       ],
     };
     const options = {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
       animation: matchMedia("(prefers-reduced-motion: reduce)").matches ? false : { duration: 250 },
       plugins: {
-        legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 10, padding: 16 } },
+        legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 10, padding: 16, color: "#6B5B54" } },
         tooltip: {
-          backgroundColor: "#0D202B", borderColor: "#6D8998", borderWidth: 1, titleColor: "#EDF4F7", bodyColor: "#EDF4F7",
+          backgroundColor: "rgba(255, 252, 248, 0.96)", borderColor: "rgba(255, 111, 89, 0.4)", borderWidth: 1,
+          titleColor: "#2A221E", bodyColor: "#2A221E", padding: 12, cornerRadius: 10,
           callbacks: {
             title: (it) => series[it[0].dataIndex].date + (isPart(it[0].dataIndex) ? " (partial day, UTC)" : " (UTC)"),
             label: (c) => " " + c.dataset.label + ": " + nf.format(Math.round(c.parsed.y)),
@@ -390,11 +391,11 @@
         },
       },
       scales: {
-        x: { grid: { color: "rgba(54,83,98,.5)" }, ticks: { maxRotation: 0, autoSkip: false, font: { size: 11 } } },
-        yCount: { position: "left", beginAtZero: true, grid: { color: "rgba(54,83,98,.5)" }, ticks: { color: "#F5CF65", callback: (v) => compact.format(v) },
-                  title: { display: true, text: "Detections", color: "#F5CF65" } },
-        yFrp: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { color: "#94C4E0", callback: (v) => compact.format(v) },
-                title: { display: true, text: "FRP (MW)", color: "#94C4E0" } },
+        x: { grid: { color: "rgba(235, 215, 202, 0.5)" }, ticks: { maxRotation: 0, autoSkip: false, font: { size: 11 }, color: "#6B5B54" } },
+        yCount: { position: "left", beginAtZero: true, grid: { color: "rgba(235, 215, 202, 0.5)" }, ticks: { color: "#D63923", callback: (v) => compact.format(v) },
+                  title: { display: true, text: "Detections", color: "#D63923" } },
+        yFrp: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { color: "#2A8382", callback: (v) => compact.format(v) },
+                title: { display: true, text: "FRP (MW)", color: "#2A8382" } },
       },
     };
     if (chart) chart.destroy();

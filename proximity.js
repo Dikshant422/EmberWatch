@@ -264,10 +264,10 @@
       // Circle buffer
       const circle = L.circle([P.point.lat, P.point.lon], {
         radius: P.bufferKm * 1000,
-        color: "#E7AB20",
+        color: "#FF6F59",
         weight: 2,
-        fillColor: "#E7AB20",
-        fillOpacity: 0.08
+        fillColor: "#FF8E75",
+        fillOpacity: 0.12
       });
       P.geomGroup.addLayer(circle);
 
@@ -305,18 +305,18 @@
         const corridorCoords = createCorridorPolygon(pts, P.bufferKm);
         if (corridorCoords.length > 0) {
           const poly = L.polygon(corridorCoords, {
-            color: "#E7AB20",
-            weight: 1.5,
+            color: "#FF6F59",
+            weight: 1.8,
             dashArray: "4, 4",
-            fillColor: "#E7AB20",
-            fillOpacity: 0.07
+            fillColor: "#FF8E75",
+            fillOpacity: 0.1
           });
           P.geomGroup.addLayer(poly);
         }
 
         // Center route line
         const line = L.polyline(pts.map((p) => [p.lat, p.lon]), {
-          color: P.roadPoints ? "#94C4E0" : "#E7AB20",
+          color: P.roadPoints ? "#2A8382" : "#FF6F59",
           weight: 3.5,
           opacity: 0.95
         });
@@ -338,7 +338,7 @@
           radius: Math.min(14, 3 + 1.2 * Math.sqrt(r[2])),
           fillColor: col,
           fillOpacity: 0.9,
-          color: "#EDF4F7",
+          color: "#FFFFFF",
           weight: 1.5
         });
 
