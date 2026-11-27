@@ -174,8 +174,10 @@
     bufferKm: 25,
     point: null,      // { lat, lon, label }
     waypoints: [],    // [{ lat, lon, label }, ...]
-    roadPoints: null, // [{ lat, lon }, ...] if snapped via OSRM
+    roadPoints: null, // [{ lat, lon }, ...] active snapped route
     roadDistanceKm: null,
+    routes: [],       // OSRM alternative routes [{ idx, rawPoints, points, distanceKm, durationMin, result, isSafest }]
+    selectedRouteIdx: 0,
     isSnapping: false,
     lastResult: null,
 
@@ -183,6 +185,15 @@
     geomGroup: null,
     cellGroup: null
   };
+
+  function downsamplePoints(pts, maxPts = 120) {
+    if (!pts || pts.length <= maxPts) return pts;
+    const step = (pts.length - 1) / (maxPts - 1);
+    const out = [];
+    for (let i = 0; i < maxPts - 1; i++) out.push(pts[Math.round(i * step)]);
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
 
   const esc = (t) => String(t || "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   const nf = new Intl.NumberFormat("en-US");
@@ -217,22 +228,53 @@
   async function fetchOSRMRoute(waypoints) {
     if (!waypoints || waypoints.length < 2) return null;
     const coordsStr = waypoints.map((w) => w.lon + "," + w.lat).join(";");
-    const url = "https://router.project-osrm.org/route/v1/driving/" + coordsStr + "?overview=full&geometries=geojson";
+    const url = "https://router.project-osrm.org/route/v1/driving/" + coordsStr + "?overview=full&geometries=geojson&alternatives=true";
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error("OSRM routing returned status " + res.status);
       const data = await res.json();
       if (data.code !== "Ok" || !data.routes || !data.routes.length) return null;
-      const route = data.routes[0];
-      const points = route.geometry.coordinates.map((c) => ({ lon: c[0], lat: c[1] }));
+      const routes = data.routes.slice(0, 3).map((route, idx) => {
+        const rawPoints = route.geometry.coordinates.map((c) => ({ lon: c[0], lat: c[1] }));
+        return {
+          idx,
+          rawPoints,
+          points: downsamplePoints(rawPoints, 120),
+          distanceKm: Math.round(route.distance / 100) / 10,
+          durationMin: Math.round((route.duration || 0) / 60),
+          result: null,
+          isSafest: false,
+        };
+      });
       return {
-        points,
-        distanceKm: Math.round(route.distance / 100) / 10
+        routes,
+        points: routes[0].points,
+        distanceKm: routes[0].distanceKm
       };
     } catch (err) {
       console.warn("OSRM routing failed, falling back to straight line:", err);
       return null;
     }
+  }
+
+  function scoreRoutes(cells) {
+    if (!P.routes || !P.routes.length || !cells) return;
+    let safestIdx = 0;
+    for (let i = 0; i < P.routes.length; i++) {
+      const rt = P.routes[i];
+      rt.result = queryCells(cells, { type: "route", points: rt.points }, P.bufferKm);
+      rt.isSafest = false;
+      const best = P.routes[safestIdx];
+      if (
+        rt.result.totalFRP < best.result.totalFRP ||
+        (rt.result.totalFRP === best.result.totalFRP && rt.result.totalDetections < best.result.totalDetections) ||
+        (rt.result.totalFRP === best.result.totalFRP && rt.result.totalDetections === best.result.totalDetections && rt.distanceKm < best.distanceKm)
+      ) {
+        safestIdx = i;
+      }
+    }
+    P.routes[safestIdx].isSafest = true;
+    return safestIdx;
   }
 
   // --- Map Visualization in Proximity Mode ---
@@ -298,7 +340,39 @@
       });
 
       if (P.waypoints.length >= 2) {
-        const pts = P.roadPoints || P.waypoints;
+        let pts = P.roadPoints || P.waypoints;
+        let rawPts = pts;
+
+        if (P.routes && P.routes.length > 0 && EW.S && EW.S.cells && EW.S.cells.cells) {
+          scoreRoutes(EW.S.cells.cells);
+          const sel = P.routes[P.selectedRouteIdx] || P.routes[0];
+          pts = sel.points;
+          rawPts = sel.rawPoints;
+          P.roadPoints = sel.points;
+          P.roadDistanceKm = sel.distanceKm;
+
+          // Draw unselected alternative routes as clickable dashed lines
+          P.routes.forEach((rt, idx) => {
+            if (idx === P.selectedRouteIdx) return;
+            const altLine = L.polyline(rt.rawPoints.map((p) => [p.lat, p.lon]), {
+              color: "#685850",
+              weight: 3.5,
+              opacity: 0.65,
+              dashArray: "7, 7",
+            });
+            altLine.bindTooltip(
+              "<strong>Route " + (idx + 1) + (rt.isSafest ? " (Lowest Exposure)" : "") + "</strong><br>" +
+              rt.distanceKm + " km · " + nf.format(rt.result ? rt.result.totalFRP : 0) + " MW exposure<br><em>Click to switch</em>"
+            );
+            altLine.on("click", (ev) => {
+              L.DomEvent.stopPropagation(ev);
+              P.selectedRouteIdx = idx;
+              renderProximityMap();
+            });
+            P.geomGroup.addLayer(altLine);
+          });
+        }
+
         activeGeometry = { type: "route", points: pts };
 
         // Corridor buffer polygon
@@ -314,10 +388,12 @@
           P.geomGroup.addLayer(poly);
         }
 
-        // Center route line
-        const line = L.polyline(pts.map((p) => [p.lat, p.lon]), {
-          color: P.roadPoints ? "#2A8382" : "#FF6F59",
-          weight: 3.5,
+        // Active route line
+        const selRoute = P.routes && P.routes[P.selectedRouteIdx];
+        const isClean = selRoute && selRoute.result && selRoute.result.totalFRP === 0;
+        const line = L.polyline(rawPts.map((p) => [p.lat, p.lon]), {
+          color: P.roadPoints ? (isClean ? "#1F7A4D" : "#2A8382") : "#FF6F59",
+          weight: 4,
           opacity: 0.95
         });
         P.geomGroup.addLayer(line);
@@ -435,8 +511,21 @@
     h += '<div class="prox-card"><div class="val">' + res.matches.length + '</div><div class="lbl">Active Cells</div></div>';
     h += '</div>';
 
-    // Route legs breakdown if route mode has multiple legs
-    if (P.submode === "route" && P.waypoints.length >= 2 && res.matches.length > 0) {
+    // Fire-Aware Safe Route Alternatives Comparison
+    if (P.submode === "route" && P.routes && P.routes.length > 0) {
+      h += '<h3>Safe Route Alternatives (' + P.routes.length + ')</h3>';
+      h += '<div class="route-alt-list">';
+      P.routes.forEach((rt, idx) => {
+        const active = idx === P.selectedRouteIdx;
+        const rRes = rt.result || { totalDetections: 0, totalFRP: 0 };
+        h += '<button type="button" class="route-alt-card' + (active ? ' active' : '') + '" data-route-idx="' + idx + '">' +
+          '<div class="route-alt-top"><span><b>Route ' + (idx + 1) + '</b> · ' + rt.distanceKm + ' km (' + rt.durationMin + ' min)</span>' +
+          (rt.isSafest ? '<span class="tier t-safe">Safest</span>' : '') + '</div>' +
+          '<div class="route-alt-sub">' + nf.format(rRes.totalDetections) + ' detections · ' + nf.format(rRes.totalFRP) + ' MW FRP</div>' +
+          '</button>';
+      });
+      h += '</div>';
+    } else if (P.submode === "route" && P.waypoints.length >= 2 && res.matches.length > 0) {
       h += '<h3>Segment Breakdown</h3>';
       h += '<table class="prox-legs-table"><thead><tr><th>Leg</th><th>Detections</th><th>FRP (MW)</th></tr></thead><tbody>';
       for (let s = 0; s < P.waypoints.length - 1; s++) {
@@ -451,6 +540,13 @@
     }
 
     box.innerHTML = h;
+
+    box.querySelectorAll(".route-alt-card").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        P.selectedRouteIdx = parseInt(btn.dataset.routeIdx, 10);
+        renderProximityMap();
+      });
+    });
 
     document.dispatchEvent(new CustomEvent("ew-proximity-result", {
       detail: { result: res, verdict, bufferKm: P.bufferKm, label: titleText, target: inspectTarget }
@@ -517,6 +613,7 @@
     EW.$("btn-mode-proximity").setAttribute("aria-pressed", "true");
     EW.$("region-controls").hidden = true;
     EW.$("proximity-controls").hidden = false;
+    if (EW.$("timeline-dock")) EW.$("timeline-dock").hidden = true;
 
     // Hide normal cell layer
     if (EW.layer) {
@@ -536,6 +633,7 @@
     EW.$("btn-mode-proximity").setAttribute("aria-pressed", "false");
     EW.$("region-controls").hidden = false;
     EW.$("proximity-controls").hidden = true;
+    if (EW.$("timeline-dock")) EW.$("timeline-dock").hidden = false;
 
     clearProximityGraphics();
 
@@ -570,6 +668,8 @@
       P.waypoints.push({ lat, lon, label: lat + "°, " + lon + "°" });
       P.roadPoints = null; // reset snapped road geometry on manual waypoint edit
       P.roadDistanceKm = null;
+      P.routes = [];
+      P.selectedRouteIdx = 0;
       renderProximityMap();
     }
   }
@@ -603,6 +703,8 @@
       P.waypoints.push({ lat: place.lat, lon: place.lon, label: place.name });
       P.roadPoints = null;
       P.roadDistanceKm = null;
+      P.routes = [];
+      P.selectedRouteIdx = 0;
       renderProximityMap();
     }
     input.value = "";
@@ -610,7 +712,7 @@
 
   async function handleSnapRoad() {
     if (P.waypoints.length < 2) {
-      alert("Add at least 2 waypoints before snapping to a highway corridor.");
+      alert("Add at least 2 waypoints before finding safe highway routes.");
       return;
     }
 
@@ -620,15 +722,22 @@
 
     const res = await fetchOSRMRoute(P.waypoints);
     btn.disabled = false;
-    btn.textContent = "Snap to road";
+    btn.textContent = "Find Safe Routes";
 
     if (!res) {
       alert("Could not fetch road route from OSRM. Using direct straight-line corridor.");
       P.roadPoints = null;
       P.roadDistanceKm = null;
+      P.routes = [];
+      P.selectedRouteIdx = 0;
     } else {
-      P.roadPoints = res.points;
-      P.roadDistanceKm = res.distanceKm;
+      P.routes = res.routes || [];
+      const EW = window.EW;
+      const bestIdx = (EW && EW.S && EW.S.cells) ? scoreRoutes(EW.S.cells.cells) : 0;
+      P.selectedRouteIdx = bestIdx || 0;
+      const sel = P.routes[P.selectedRouteIdx] || P.routes[0];
+      P.roadPoints = sel ? sel.points : res.points;
+      P.roadDistanceKm = sel ? sel.distanceKm : res.distanceKm;
     }
     renderProximityMap();
   }
@@ -638,6 +747,8 @@
     P.waypoints = [];
     P.roadPoints = null;
     P.roadDistanceKm = null;
+    P.routes = [];
+    P.selectedRouteIdx = 0;
     P.lastResult = null;
     renderProximityMap();
   }

@@ -10,6 +10,9 @@
     statesByIso: new Map(),     // iso_a3 -> state regions, A-Z
     sel: { iso: null, stateId: null },
     frpBucketFilter: -1,        // -1 = all, 0..4 = specific FRP class
+    basemap: "vector",          // "vector" | "satellite" | "terrain" | "nasa"
+    aerosolEnabled: false,      // NASA GIBS Aerosol / Smoke Optical Depth overlay
+    dayIdx: -1,                 // -1 = All days, 0..N-1 = single UTC day
     tableQuery: "",
     tableTier: "all",
     sortKey: "priority_score",  // or "total_frp"
@@ -172,24 +175,38 @@
     [detEl, frpEl, sigEl].forEach((el) => el.classList.remove("skeleton-text"));
 
     if (r) {
-      detEl.textContent = nf.format(r.fire_count);
-      $("kpi-detections-sub").textContent = (r.level === "state" ? r.state : r.country) + " (" + S.meta.dates.all.length + "d window)";
-      frpEl.textContent = compact.format(Math.round(r.total_frp)) + " MW";
-      const avgFrp = r.fire_count ? (r.total_frp / r.fire_count).toFixed(1) : "0";
-      $("kpi-frp-sub").textContent = "Avg " + avgFrp + " MW per detection";
+      if (S.dayIdx >= 0 && r.series[S.dayIdx]) {
+        const pt = r.series[S.dayIdx];
+        detEl.textContent = nf.format(pt.count);
+        $("kpi-detections-sub").textContent = (r.level === "state" ? r.state : r.country) + " on " + pt.date + " (UTC)";
+        frpEl.textContent = compact.format(Math.round(pt.frp)) + " MW";
+        $("kpi-frp-sub").textContent = pt.count ? ("Avg " + (pt.frp / pt.count).toFixed(1) + " MW/det (single day)") : "No detections this UTC day";
+      } else {
+        detEl.textContent = nf.format(r.fire_count);
+        $("kpi-detections-sub").textContent = (r.level === "state" ? r.state : r.country) + " (" + S.meta.dates.all.length + "d window)";
+        frpEl.textContent = compact.format(Math.round(r.total_frp)) + " MW";
+        const avgFrp = r.fire_count ? (r.total_frp / r.fire_count).toFixed(1) : "0";
+        $("kpi-frp-sub").textContent = "Avg " + avgFrp + " MW per detection";
+      }
 
       $("kpi-signal-lbl").textContent = "Priority & Signal";
       const pct = r.trend_pct !== null ? " (" + (r.trend_pct > 0 ? "+" : "") + Math.round(r.trend_pct) + "%)" : "";
       sigEl.textContent = r.trend_flag + pct;
       $("kpi-signal-sub").textContent = "Rank #" + r.rank + " of " + r.rank_of + " · Score " + r.priority_score.toFixed(1) + " (" + r.tier + ")";
     } else {
-      const assignedCount = S.countries.reduce((a, c) => a + c.fire_count, 0);
-      const worldFrp = S.countries.reduce((a, c) => a + c.total_frp, 0);
+      const assignedCount = S.dayIdx >= 0
+        ? S.countries.reduce((a, c) => a + (c.series[S.dayIdx]?.count || 0), 0)
+        : S.countries.reduce((a, c) => a + c.fire_count, 0);
+      const worldFrp = S.dayIdx >= 0
+        ? S.countries.reduce((a, c) => a + (c.series[S.dayIdx]?.frp || 0), 0)
+        : S.countries.reduce((a, c) => a + c.total_frp, 0);
       const rising = S.countries.filter((c) => c.trend_flag === "Rising").length;
       const topC = S.countries.slice().sort((a, b) => b.priority_score - a.priority_score)[0];
 
-      detEl.textContent = compact.format(S.meta.rows.kept);
-      $("kpi-detections-sub").textContent = nf.format(assignedCount) + " assigned across " + S.countries.length + " countries";
+      detEl.textContent = S.dayIdx >= 0 ? compact.format(assignedCount) : compact.format(S.meta.rows.kept);
+      $("kpi-detections-sub").textContent = S.dayIdx >= 0
+        ? ("Assigned detections on " + S.meta.dates.all[S.dayIdx] + " (UTC)")
+        : (nf.format(assignedCount) + " assigned across " + S.countries.length + " countries");
       frpEl.textContent = compact.format(Math.round(worldFrp)) + " MW";
       $("kpi-frp-sub").textContent = "NOAA-20 + NOAA-21 VIIRS 375m";
 
@@ -204,17 +221,92 @@
   const EMBER_LIGHT = ["#F59E0B", "#FF7A59", "#EA4335", "#C5221F", "#7A0C22"];
   const EMBER_DARK  = ["#B8800B", "#E7AB20", "#F08A2B", "#E2503C", "#FFF1C9"];
   const currentEmber = () => (isDarkTheme() ? EMBER_DARK : EMBER_LIGHT);
-  let map, canvas, layer, landLayer, tip, frpBreaks = [], lastBoundsRows = [];
+  let map, canvas, layer, landLayer, tileLayer, aerosolLayer, tip, frpBreaks = [], lastBoundsRows = [];
   const WORLD = [[-52, -140], [72, 160]];
 
   function quantile(sorted, q) { return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]; }
   const frpBucket = (v) => frpBreaks.filter((b) => v >= b).length;
   const frpColour = (v) => currentEmber()[frpBucket(v)];
 
-  function landStyle() {
-    return isDarkTheme()
+  function dayChoroplethColor(frp) {
+    if (frp <= 0) return null;
+    if (frp > 10000) return "#B91C1C";
+    if (frp > 2500)  return "#EA4335";
+    if (frp > 500)   return "#FF7A59";
+    return "#F59E0B";
+  }
+
+  function activeGibsDate() {
+    if (!S.meta || !S.meta.dates) return "2026-11-14";
+    if (S.dayIdx >= 0 && S.meta.dates.all[S.dayIdx]) return S.meta.dates.all[S.dayIdx];
+    const comp = S.meta.dates.complete;
+    return (comp && comp.length ? comp[comp.length - 1] : S.meta.dates.all[0]);
+  }
+
+  function landStyle(feature) {
+    const dark = isDarkTheme();
+    const isVec = S.basemap === "vector";
+    if (S.dayIdx >= 0 && feature && feature.properties) {
+      const reg = S.byId.get(feature.properties.id);
+      const frp = reg && reg.series[S.dayIdx] ? reg.series[S.dayIdx].frp : 0;
+      const col = dayChoroplethColor(frp);
+      if (col) {
+        return {
+          color: dark ? "#2F4A59" : "#D8C7B8",
+          weight: 0.8,
+          fillColor: col,
+          fillOpacity: isVec ? 0.55 : 0.32,
+        };
+      }
+    }
+    if (!isVec) {
+      const lightSpace = S.basemap === "satellite" || S.basemap === "nasa";
+      return {
+        color: lightSpace ? "rgba(255, 255, 255, 0.50)" : "rgba(42, 33, 29, 0.45)",
+        weight: 0.9,
+        fillOpacity: 0,
+      };
+    }
+    return dark
       ? { color: "#2F4A59", weight: 0.7, fillColor: "#132C3A", fillOpacity: 1 }
       : { color: "#D8C7B8", weight: 0.8, fillColor: "#EDE4DA", fillOpacity: 1 };
+  }
+
+  function setBasemap(mode) {
+    S.basemap = mode;
+    document.querySelectorAll(".bm-btn").forEach((b) =>
+      b.setAttribute("aria-pressed", b.dataset.basemap === mode ? "true" : "false")
+    );
+    if (tileLayer) { tileLayer.remove(); tileLayer = null; }
+    if (mode === "satellite") {
+      tileLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+        attribution: "Imagery &copy; Esri", maxZoom: 17, zIndex: 100
+      }).addTo(map);
+    } else if (mode === "terrain") {
+      tileLayer = L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+        attribution: "Terrain &copy; OpenTopoMap", maxZoom: 17, zIndex: 100
+      }).addTo(map);
+    } else if (mode === "nasa") {
+      const d = activeGibsDate();
+      tileLayer = L.tileLayer(
+        "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/" +
+        d + "/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg",
+        { attribution: "Imagery &copy; NASA GIBS (" + d + ")", maxNativeZoom: 9, maxZoom: 14, zIndex: 100 }
+      ).addTo(map);
+    }
+    if (landLayer) landLayer.setStyle(landStyle);
+    drawBorders();
+  }
+
+  function updateAerosolLayer() {
+    if (aerosolLayer) { aerosolLayer.remove(); aerosolLayer = null; }
+    if (!S.aerosolEnabled || !map) return;
+    const d = activeGibsDate();
+    aerosolLayer = L.tileLayer(
+      "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Combined_Value_Added_AOD/default/" +
+      d + "/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png",
+      { attribution: "Smoke AOD &copy; NASA GIBS (" + d + ")", maxNativeZoom: 6, maxZoom: 14, opacity: 0.65, zIndex: 350 }
+    ).addTo(map);
   }
 
   function initMap() {
@@ -226,7 +318,7 @@
     });
     if (S.countryGeo) {
       landLayer = L.geoJSON(S.countryGeo, {
-        pane: "land", renderer: L.canvas({ pane: "land" }), interactive: false, style: landStyle(),
+        pane: "land", renderer: L.canvas({ pane: "land" }), interactive: false, style: landStyle,
       }).addTo(map);
     }
     canvas = L.canvas({ padding: 0.5 });
@@ -298,11 +390,22 @@
       L.geoJSON(data, { pane, renderer: L.canvas({ pane }), interactive: false, style }).addTo(map));
 
     const dark = isDarkTheme();
-    if (a1) add(a1, "regions", dark
-      ? { color: "#7FA3B3", weight: 0.9, fillColor: "#1D4152", fillOpacity: 1 }
-      : { color: "#CBB7A6", weight: 0.9, fillColor: "#E5DAD0", fillOpacity: 1 });
+    const isVec = S.basemap === "vector";
+    if (a1) {
+      add(a1, "regions", (feature) => {
+        if (S.dayIdx >= 0 && feature && feature.properties) {
+          const reg = S.byId.get(feature.properties.id);
+          const frp = reg && reg.series[S.dayIdx] ? reg.series[S.dayIdx].frp : 0;
+          const col = dayChoroplethColor(frp);
+          if (col) return { color: dark ? "#7FA3B3" : "#CBB7A6", weight: 0.9, fillColor: col, fillOpacity: isVec ? 0.62 : 0.42 };
+        }
+        return dark
+          ? { color: "#7FA3B3", weight: 0.9, fillColor: "#1D4152", fillOpacity: isVec ? 1 : 0 }
+          : { color: "#CBB7A6", weight: 0.9, fillColor: "#E5DAD0", fillOpacity: isVec ? 1 : 0 };
+      });
+    }
     add(S.countryGeo.features.filter((f) => f.properties.id === iso), "outline",
-      { color: dark ? "#EDF4F7" : "#2A211D", weight: 1.5, opacity: 0.72, fill: false });
+      { color: (dark || S.basemap === "satellite" || S.basemap === "nasa") ? "#EDF4F7" : "#2A211D", weight: 1.6, opacity: 0.8, fill: false });
     const st = stateId && a1 && a1.features.find((f) => f.properties.id === stateId);
     if (st) add(st, "outline",
       { color: "#FF6F59", weight: 2.5, fillColor: "#FF6F59", fillOpacity: 0.14 });
@@ -520,8 +623,10 @@
     const mk = (label, key, colour, axis, shape) => ({
       label, data: series.map((p) => p[key]), yAxisID: axis,
       borderColor: colour, backgroundColor: colour, borderWidth: 2.5, tension: 0.15,
-      pointStyle: shape, pointRadius: 5, pointHoverRadius: 7,
-      pointBackgroundColor: (c) => (isPart(c.dataIndex) ? hollowBg : colour),
+      pointStyle: shape,
+      pointRadius: (c) => (c.dataIndex === S.dayIdx ? 8 : 5),
+      pointHoverRadius: 8,
+      pointBackgroundColor: (c) => (c.dataIndex === S.dayIdx ? "#FF6F59" : (isPart(c.dataIndex) ? hollowBg : colour)),
       pointBorderColor: colour, pointBorderWidth: 2,
       segment: { borderDash: dash },
     });
@@ -688,6 +793,7 @@
     const mapTab = {
       "tab-btn-overview": "pane-overview",
       "tab-btn-evs": "pane-evs",
+      "tab-btn-field": "pane-field",
       "tab-btn-checks": "pane-checks",
     };
     Object.entries(mapTab).forEach(([btnId, paneId]) => {
@@ -714,13 +820,81 @@
     $("btn-fit-world").addEventListener("click", () => fitCurrentBounds());
   }
 
+  // ---------- Timeline Scrubber & Basemap Wiring ----------
+  let tlTimer = null;
+  function setTimelineDay(idx) {
+    const dates = S.meta.dates.all;
+    const partial = new Set(S.meta.dates.partial);
+    S.dayIdx = idx;
+    $("tl-slider").value = String(idx);
+    $("btn-tl-reset").hidden = (idx < 0);
+    if (idx < 0) {
+      $("tl-label").textContent = "All Days";
+    } else {
+      const d = dates[idx];
+      $("tl-label").textContent = dayLabel(d) + (partial.has(d) ? " (Part)" : "");
+    }
+    if (landLayer) landLayer.setStyle(landStyle);
+    if (S.basemap === "nasa") setBasemap("nasa");
+    if (S.aerosolEnabled) updateAerosolLayer();
+    drawBorders();
+    renderKPIs();
+    renderChart();
+    document.dispatchEvent(new CustomEvent("ew-day-change", { detail: { dayIdx: idx } }));
+  }
+
+  function stopTimelinePlay() {
+    if (tlTimer) { clearInterval(tlTimer); tlTimer = null; }
+    $("tl-icon-play").hidden = false;
+    $("tl-icon-pause").hidden = true;
+  }
+
+  function wireTimelineAndBasemap() {
+    const dates = S.meta.dates.all;
+    const slider = $("tl-slider");
+    slider.max = String(dates.length - 1);
+    slider.addEventListener("input", (e) => {
+      stopTimelinePlay();
+      setTimelineDay(parseInt(e.target.value, 10));
+    });
+    $("btn-tl-reset").addEventListener("click", () => {
+      stopTimelinePlay();
+      setTimelineDay(-1);
+    });
+    $("btn-tl-play").addEventListener("click", () => {
+      if (tlTimer) { stopTimelinePlay(); return; }
+      $("tl-icon-play").hidden = true;
+      $("tl-icon-pause").hidden = false;
+      let cur = S.dayIdx < 0 ? 0 : S.dayIdx;
+      setTimelineDay(cur);
+      tlTimer = setInterval(() => {
+        cur = (cur + 1) % dates.length;
+        setTimelineDay(cur);
+      }, 1200);
+    });
+
+    document.querySelector(".basemap-seg").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-basemap]");
+      if (btn) setBasemap(btn.dataset.basemap);
+    });
+
+    const aodBtn = $("btn-toggle-aerosol");
+    if (aodBtn) {
+      aodBtn.addEventListener("click", () => {
+        S.aerosolEnabled = !S.aerosolEnabled;
+        aodBtn.setAttribute("aria-pressed", S.aerosolEnabled ? "true" : "false");
+        updateAerosolLayer();
+      });
+    }
+  }
+
   function applyTheme(theme, redraw) {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("ew-theme", theme);
     $("icon-theme-moon").hidden = (theme === "dark");
     $("icon-theme-sun").hidden = (theme !== "dark");
     if (redraw && map) {
-      if (landLayer) landLayer.setStyle(landStyle());
+      if (landLayer) landLayer.setStyle(landStyle);
       drawBorders();
       renderLegend();
       if ($("btn-mode-proximity").getAttribute("aria-pressed") !== "true") drawCells(false);
@@ -742,6 +916,7 @@
     initMap();
     wireLegend();
     wireTabsAndTheme();
+    wireTimelineAndBasemap();
     wireCommandSearch();
     $("sel-country").addEventListener("change", onCountry);
     $("sel-state").addEventListener("change", onState);
@@ -750,7 +925,7 @@
 
     window.EW = {
       S, nf, compact, esc, $, currentRegion, currentSeries, frpColour, frpBreaks,
-      drawCells, drawBorders, pickRegion, tableRows, activateTab, renderSelection,
+      drawCells, drawBorders, pickRegion, tableRows, activateTab, renderSelection, setBasemap,
       get EMBER() { return currentEmber(); },
       get map() { return map; }, get canvas() { return canvas; },
       get layer() { return layer; }, set layer(l) { layer = l; },

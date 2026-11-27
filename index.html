@@ -63,6 +63,16 @@
         </button>
       </div>
 
+      <button type="button" id="btn-compare" class="icon-pill" title="Compare two regions side by side">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="14" x="3" y="5" rx="2"/><rect width="8" height="14" x="13" y="5" rx="2"/></svg>
+        <span class="hide-sm">Compare</span>
+      </button>
+
+      <button type="button" id="btn-evs-tour" class="icon-pill" title="Guided 4-step EVS presentation tour">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span class="hide-sm">Tour</span>
+      </button>
+
       <button type="button" id="btn-methodology" class="icon-pill" title="Fire Science, Formulas &amp; Limitations">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
         <span class="hide-sm">Science</span>
@@ -177,7 +187,7 @@
         </div>
 
         <div class="action-buttons">
-          <button type="button" id="btn-snap-road" class="btn-action snap-btn" hidden title="Snap route to highways via OSRM">Snap to road</button>
+          <button type="button" id="btn-snap-road" class="btn-action snap-btn" hidden title="Compare highway routes and find lowest fire exposure">Find Safe Routes</button>
           <button type="button" id="btn-clear-proximity" class="btn-action secondary">Clear</button>
         </div>
       </div>
@@ -191,8 +201,28 @@
     <section class="panel map-panel" aria-label="Interactive map of fire detections">
       <div id="map" role="img" aria-label="Map of fire detections on a 0.25 degree grid"></div>
 
+      <!-- Top-Left Floating 7-Day Timeline Playback Scrubber -->
+      <div class="timeline-dock" id="timeline-dock" aria-label="7-day fire timeline playback">
+        <button type="button" id="btn-tl-play" class="tl-play" title="Play day-by-day fire activity" aria-label="Play timeline">
+          <svg id="tl-icon-play" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          <svg id="tl-icon-pause" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </button>
+        <input type="range" id="tl-slider" min="-1" max="7" value="-1" step="1" aria-label="Select day in 7-day window">
+        <span class="tl-label" id="tl-label">All Days</span>
+        <button type="button" id="btn-tl-reset" class="tl-reset" hidden title="Show full 7-day window">7d</button>
+      </div>
+
       <!-- Top-Right Floating Map HUD -->
       <div class="map-hud">
+        <div class="basemap-seg" role="group" aria-label="Map basemap">
+          <button type="button" data-basemap="vector" class="bm-btn" aria-pressed="true">Vector</button>
+          <button type="button" data-basemap="satellite" class="bm-btn" aria-pressed="false">Satellite</button>
+          <button type="button" data-basemap="terrain" class="bm-btn" aria-pressed="false">Terrain</button>
+          <button type="button" data-basemap="nasa" class="bm-btn" aria-pressed="false" title="NASA NOAA-20 VIIRS TrueColor synced to date">NASA Daily</button>
+        </div>
+        <button type="button" id="btn-toggle-aerosol" class="hud-pill" aria-pressed="false" title="Overlay NASA space-measured Aerosol/Smoke Optical Depth">
+          <span>Space Smoke</span>
+        </button>
         <button type="button" id="btn-toggle-wind" class="hud-pill" aria-pressed="true" title="Toggle live downwind smoke drift cone">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg>
           <span>Smoke Drift</span>
@@ -213,7 +243,8 @@
         <h2>Inspector</h2>
         <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
           <button type="button" role="tab" id="tab-btn-overview" aria-selected="true" aria-controls="pane-overview" class="itab">Overview</button>
-          <button type="button" role="tab" id="tab-btn-evs" aria-selected="false" aria-controls="pane-evs" class="itab">Smoke &amp; Weather</button>
+          <button type="button" role="tab" id="tab-btn-evs" aria-selected="false" aria-controls="pane-evs" class="itab">Smoke</button>
+          <button type="button" role="tab" id="tab-btn-field" aria-selected="false" aria-controls="pane-field" class="itab">Assets &amp; Field</button>
           <button type="button" role="tab" id="tab-btn-checks" aria-selected="false" aria-controls="pane-checks" class="itab">Checks</button>
         </div>
       </div>
@@ -222,12 +253,18 @@
         <div id="pane-overview" role="tabpanel" aria-labelledby="tab-btn-overview" class="ipane">
           <div id="summary-body"><div class="skeleton-block"></div></div>
           <div id="evs-carbon-box"></div>
+          <div id="evs-hotspots-box"></div>
         </div>
 
         <div id="pane-evs" role="tabpanel" aria-labelledby="tab-btn-evs" class="ipane" hidden>
           <div id="evs-live-body">
             <p class="muted">Select a country, state, or click any fire cell on the map to inspect live air quality (PM2.5/AQI) and downwind smoke drift.</p>
           </div>
+        </div>
+
+        <div id="pane-field" role="tabpanel" aria-labelledby="tab-btn-field" class="ipane" hidden>
+          <div id="evs-assets-box"></div>
+          <div id="evs-field-log-box"></div>
         </div>
 
         <div id="pane-checks" role="tabpanel" aria-labelledby="tab-btn-checks" class="ipane" hidden>
@@ -288,10 +325,50 @@
   </div>
 </div>
 
+<!-- Side-by-Side Region Comparison Modal -->
+<div id="modal-compare" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modal-cmp-title">
+  <div class="modal-glass modal-wide">
+    <div class="modal-head">
+      <h2 id="modal-cmp-title">Side-by-Side Region Comparison</h2>
+      <button type="button" class="modal-close" data-close-modal="modal-compare" aria-label="Close modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="compare-selectors">
+        <label class="field">
+          <span>Region A</span>
+          <select id="cmp-sel-a"></select>
+        </label>
+        <div class="cmp-vs" aria-hidden="true">VS</div>
+        <label class="field">
+          <span>Region B</span>
+          <select id="cmp-sel-b"></select>
+        </label>
+      </div>
+      <div id="compare-body"></div>
+      <div class="cmp-chart-wrap"><canvas id="cmp-chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Guided EVS Presentation Tour Floating Card -->
+<aside id="tour-float" class="tour-card" hidden aria-label="Guided EVS Tour">
+  <div class="tour-head">
+    <span class="tour-step-badge" id="tour-step-badge">Step 1 / 4</span>
+    <button type="button" id="btn-tour-exit" class="tour-exit" aria-label="Exit guided tour">&times;</button>
+  </div>
+  <h3 id="tour-title"></h3>
+  <p id="tour-desc"></p>
+  <div class="tour-actions">
+    <button type="button" id="btn-tour-prev" class="btn-action secondary">Back</button>
+    <button type="button" id="btn-tour-next" class="btn-action">Next</button>
+  </div>
+</aside>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="app.js"></script>
 <script src="proximity.js"></script>
 <script src="evs.js"></script>
+<script src="field_intel.js"></script>
 </body>
 </html>
