@@ -1,115 +1,297 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="peach">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EmberWatch: fire detections, screened</title>
+  <title>EmberWatch · Global Fire Detection &amp; EVS Screening</title>
 
-  <!-- Helix UI fonts (Fontshare). Falls back to system fonts if offline. -->
+  <!-- Fonts: Clash Grotesk + Satoshi (Fontshare) with crisp system fallbacks -->
   <link rel="preconnect" href="https://api.fontshare.com">
   <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
-  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=clash-grotesk@500,600&f[]=satoshi@400,500,700&display=swap">
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=clash-grotesk@500,600,700&f[]=satoshi@400,500,700&display=swap">
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<header class="top">
-  <div class="brand">
-    <div class="brand-title-wrap">
-      <h1>EmberWatch</h1>
-      <span class="brand-badge">Decision Screening</span>
+<!-- Ambient Glass Backdrop Orbs -->
+<div class="ambient-bg" aria-hidden="true">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+</div>
+
+<!-- Top Floating Glass Command Header -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div class="brand-text">
+        <div class="brand-title-row">
+          <h1>EmberWatch</h1>
+          <span class="brand-badge">EVS Screening</span>
+        </div>
+        <div class="brand-sub">
+          <span class="live-indicator"><span class="live-dot"></span> VIIRS 375m</span>
+          <span class="sep">·</span>
+          <span>SDG 15 · 13 · 11</span>
+        </div>
+      </div>
     </div>
-    <div class="brand-meta">
-      <span class="meta-pill"><span class="live-dot"></span> 7-Day VIIRS</span>
-      <span class="meta-pill">SDG 15 · 13 · 11</span>
+
+    <!-- Unified Command Search (Regions + Global Places) -->
+    <div class="cmd-search-wrap" role="search" aria-label="Global jump search">
+      <svg class="cmd-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+      </svg>
+      <input type="text" id="cmd-search-input" placeholder="Jump to country, state, or place…" autocomplete="off" aria-label="Jump to country, state, or place">
+      <kbd class="cmd-kbd" aria-hidden="true">Ctrl K</kbd>
+      <div id="cmd-search-results" class="cmd-dropdown" hidden></div>
+    </div>
+
+    <!-- Global Mode & Utility Actions -->
+    <div class="topbar-actions">
+      <div class="seg seg-compact" role="group" aria-label="Screening mode">
+        <button type="button" id="btn-mode-region" class="mode-btn" aria-pressed="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+          <span>Region</span>
+        </button>
+        <button type="button" id="btn-mode-proximity" class="mode-btn" aria-pressed="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span>Proximity</span>
+        </button>
+      </div>
+
+      <button type="button" id="btn-methodology" class="icon-pill" title="Fire Science, Formulas &amp; Limitations">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+        <span class="hide-sm">Science</span>
+      </button>
+
+      <button type="button" id="btn-export-report" class="icon-pill accent" title="Export EVS Field Screening Report">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span class="hide-sm">Report</span>
+      </button>
+
+      <button type="button" id="btn-theme-toggle" class="icon-btn" title="Switch Peach Glass / Ember Dark theme" aria-label="Switch color theme">
+        <svg id="icon-theme-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+        <svg id="icon-theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+      </button>
     </div>
   </div>
 </header>
 
 <div id="status" class="status" role="status" hidden></div>
 
-<section class="controls" aria-label="Screening controls">
-  <div class="controls-card">
-    <div class="mode-bar">
-      <div class="seg" role="group" aria-label="Screening mode">
-        <span class="seg-label">Mode</span>
-        <button type="button" id="btn-mode-region" class="mode-btn" aria-pressed="true">Region</button>
-        <button type="button" id="btn-mode-proximity" class="mode-btn" aria-pressed="false">Proximity Check</button>
+<!-- Main Workspace Shell -->
+<main class="workspace">
+
+  <!-- KPI Hero Strip (4 Glass Metric Cards) -->
+  <section class="kpi-strip" aria-label="Key fire detection indicators">
+    <article class="kpi-card" id="kpi-card-detections">
+      <div class="kpi-head">
+        <span class="kpi-label">Fire Detections (7d)</span>
+        <span class="kpi-icon kpi-icon-peach" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+        </span>
       </div>
-    </div>
-
-  <div id="region-controls" class="mode-group">
-    <label class="field">
-      <span>Country</span>
-      <select id="sel-country" disabled><option>Loading…</option></select>
-    </label>
-    <label class="field">
-      <span>State or province</span>
-      <select id="sel-state" disabled><option>Choose a country first</option></select>
-    </label>
-  </div>
-
-  <div id="proximity-controls" class="mode-group" hidden>
-    <div class="seg" role="group" aria-label="Proximity type">
-      <span class="seg-label">Target</span>
-      <button type="button" id="btn-submode-point" aria-pressed="true">Point radius</button>
-      <button type="button" id="btn-submode-route" aria-pressed="false">Route corridor</button>
-    </div>
-
-    <label class="field">
-      <span id="label-buffer">Radius</span>
-      <select id="sel-buffer">
-        <option value="10">10 km</option>
-        <option value="25" selected>25 km</option>
-        <option value="50">50 km</option>
-      </select>
-    </label>
-
-    <div class="field search-field">
-      <span>Find place (OSM)</span>
-      <div class="search-wrap">
-        <input type="text" id="input-place-search" placeholder="e.g. Nagpur or Bhopal" autocomplete="off">
-        <button type="button" id="btn-place-search" class="btn-action">Search</button>
+      <div class="kpi-body-row">
+        <div>
+          <div class="kpi-value skeleton-text" id="kpi-detections-val">—</div>
+          <div class="kpi-sub" id="kpi-detections-sub">Loading dataset…</div>
+        </div>
+        <div class="kpi-spark" id="kpi-sparkline" aria-hidden="true"></div>
       </div>
+    </article>
+
+    <article class="kpi-card" id="kpi-card-frp">
+      <div class="kpi-head">
+        <span class="kpi-label">Radiative Power (FRP)</span>
+        <span class="kpi-icon kpi-icon-amber" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </span>
+      </div>
+      <div class="kpi-value skeleton-text" id="kpi-frp-val">—</div>
+      <div class="kpi-sub" id="kpi-frp-sub">Cumulative thermal output</div>
+    </article>
+
+    <article class="kpi-card" id="kpi-card-signal">
+      <div class="kpi-head">
+        <span class="kpi-label" id="kpi-signal-lbl">Short-Term Signal</span>
+        <span class="kpi-icon kpi-icon-teal" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+        </span>
+      </div>
+      <div class="kpi-value skeleton-text" id="kpi-signal-val">—</div>
+      <div class="kpi-sub" id="kpi-signal-sub">Last 2 vs prior 5 complete days</div>
+    </article>
+
+    <article class="kpi-card" id="kpi-card-emissions">
+      <div class="kpi-head">
+        <span class="kpi-label">Est. CO₂e Screening</span>
+        <span class="kpi-icon kpi-icon-coral" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+        </span>
+      </div>
+      <div class="kpi-value skeleton-text" id="kpi-emissions-val">—</div>
+      <div class="kpi-sub" id="kpi-emissions-sub">Wooster et al. FRP screening</div>
+    </article>
+  </section>
+
+  <!-- Contextual Control Bar -->
+  <section class="controls" aria-label="Screening controls">
+    <div class="controls-card">
+      <div id="region-controls" class="mode-group">
+        <label class="field">
+          <span>Country</span>
+          <select id="sel-country" disabled><option>Loading…</option></select>
+        </label>
+        <label class="field">
+          <span>State or province</span>
+          <select id="sel-state" disabled><option>Choose a country first</option></select>
+        </label>
+      </div>
+
+      <div id="proximity-controls" class="mode-group" hidden>
+        <div class="seg" role="group" aria-label="Proximity type">
+          <span class="seg-label">Target</span>
+          <button type="button" id="btn-submode-point" aria-pressed="true">Point radius</button>
+          <button type="button" id="btn-submode-route" aria-pressed="false">Route corridor</button>
+        </div>
+
+        <label class="field field-sm">
+          <span id="label-buffer">Radius</span>
+          <select id="sel-buffer">
+            <option value="10">10 km</option>
+            <option value="25" selected>25 km</option>
+            <option value="50">50 km</option>
+          </select>
+        </label>
+
+        <div class="field search-field">
+          <span>Find place (OSM)</span>
+          <div class="search-wrap">
+            <input type="text" id="input-place-search" placeholder="e.g. Nagpur or Bhopal" autocomplete="off">
+            <button type="button" id="btn-place-search" class="btn-action">Search</button>
+          </div>
+        </div>
+
+        <div class="action-buttons">
+          <button type="button" id="btn-snap-road" class="btn-action snap-btn" hidden title="Snap route to highways via OSRM">Snap to road</button>
+          <button type="button" id="btn-clear-proximity" class="btn-action secondary">Clear</button>
+        </div>
+      </div>
+
+      <p class="selection" id="selection-readout" aria-live="polite">Loading fire detection grid…</p>
     </div>
-
-    <div class="action-buttons">
-      <button type="button" id="btn-snap-road" class="btn-action snap-btn" hidden title="Snap route to highways via OSRM">Snap to road</button>
-      <button type="button" id="btn-clear-proximity" class="btn-action secondary">Clear</button>
-    </div>
-  </div>
-
-    <p class="selection" id="selection-readout" aria-live="polite"></p>
-  </div>
-</section>
-
-<main class="grid">
-  <section class="panel map-panel" aria-label="Map of fire detections">
-    <div id="map" role="img" aria-label="Map of fire detections on a 0.25 degree grid"></div>
-    <div class="map-legend" id="map-legend"></div>
   </section>
 
-  <aside class="panel summary-panel" id="summary-panel" aria-label="Summary">
-    <h2>Summary</h2>
-    <div id="summary-body"><p class="muted">Pending piece 5.</p></div>
-  </aside>
+  <!-- Spatial Primary Stage: Map + Tabbed Inspector -->
+  <section class="spatial-grid">
+    <section class="panel map-panel" aria-label="Interactive map of fire detections">
+      <div id="map" role="img" aria-label="Map of fire detections on a 0.25 degree grid"></div>
 
-  <section class="panel table-panel" aria-label="Priority table">
-    <h2 id="table-title">Priority table</h2>
-    <div id="table-body"><p class="muted">Pending piece 3.</p></div>
+      <!-- Top-Right Floating Map HUD -->
+      <div class="map-hud">
+        <button type="button" id="btn-toggle-wind" class="hud-pill" aria-pressed="true" title="Toggle live downwind smoke drift cone">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg>
+          <span>Smoke Drift</span>
+        </button>
+        <button type="button" id="btn-fit-world" class="hud-pill" title="Reset map zoom to selection">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+          <span>Fit View</span>
+        </button>
+      </div>
+
+      <!-- Floating Interactive Legend -->
+      <div class="map-legend" id="map-legend"></div>
+    </section>
+
+    <!-- Right Tabbed Glass Inspector -->
+    <aside class="panel summary-panel" id="summary-panel" aria-label="Fire &amp; EVS Inspector">
+      <div class="inspector-header">
+        <h2>Inspector</h2>
+        <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
+          <button type="button" role="tab" id="tab-btn-overview" aria-selected="true" aria-controls="pane-overview" class="itab">Overview</button>
+          <button type="button" role="tab" id="tab-btn-evs" aria-selected="false" aria-controls="pane-evs" class="itab">Smoke &amp; Weather</button>
+          <button type="button" role="tab" id="tab-btn-checks" aria-selected="false" aria-controls="pane-checks" class="itab">Checks</button>
+        </div>
+      </div>
+
+      <div class="inspector-scroll">
+        <div id="pane-overview" role="tabpanel" aria-labelledby="tab-btn-overview" class="ipane">
+          <div id="summary-body"><div class="skeleton-block"></div></div>
+          <div id="evs-carbon-box"></div>
+        </div>
+
+        <div id="pane-evs" role="tabpanel" aria-labelledby="tab-btn-evs" class="ipane" hidden>
+          <div id="evs-live-body">
+            <p class="muted">Select a country, state, or click any fire cell on the map to inspect live air quality (PM2.5/AQI) and downwind smoke drift.</p>
+          </div>
+        </div>
+
+        <div id="pane-checks" role="tabpanel" aria-labelledby="tab-btn-checks" class="ipane" hidden>
+          <div id="evs-checks-body"></div>
+        </div>
+      </div>
+    </aside>
   </section>
 
-  <section class="panel chart-panel" aria-label="Daily fire detections">
-    <h2>Daily fire detections</h2>
-    <div id="chart-body"><p class="muted">Pending piece 4.</p></div>
+  <!-- Bottom Analytics Row: Priority Table + Daily Chart -->
+  <section class="analytics-grid">
+    <section class="panel table-panel" aria-label="Priority ranking table">
+      <div class="panel-head-row">
+        <h2 id="table-title">Priority ranking</h2>
+        <div class="table-quick-filters" id="table-quick-filters">
+          <input type="search" id="table-filter-input" class="mini-search" placeholder="Filter rows…" aria-label="Filter table rows">
+          <div class="tier-pills" role="group" aria-label="Filter by priority tier">
+            <button type="button" data-tier="all" class="tier-pill" aria-pressed="true">All</button>
+            <button type="button" data-tier="High" class="tier-pill" aria-pressed="false">High</button>
+            <button type="button" data-tier="Medium" class="tier-pill" aria-pressed="false">Medium</button>
+            <button type="button" data-tier="Low" class="tier-pill" aria-pressed="false">Low</button>
+          </div>
+        </div>
+      </div>
+      <div id="table-body"><div class="skeleton-block"></div></div>
+    </section>
+
+    <section class="panel chart-panel" aria-label="Daily fire detections">
+      <div class="panel-head-row">
+        <h2>Daily fire detections</h2>
+        <span class="chart-badge" title="Dashed points represent partial UTC edge days">UTC · Dashed = partial day</span>
+      </div>
+      <div id="chart-body"><div class="skeleton-block"></div></div>
+    </section>
   </section>
+
 </main>
+
+<!-- Methodology & Scientific Integrity Modal -->
+<div id="modal-methodology" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modal-meth-title">
+  <div class="modal-glass">
+    <div class="modal-head">
+      <h2 id="modal-meth-title">Fire Science, Methodology &amp; Limitations</h2>
+      <button type="button" class="modal-close" data-close-modal="modal-methodology" aria-label="Close modal">&times;</button>
+    </div>
+    <div class="modal-body" id="methodology-content"></div>
+  </div>
+</div>
+
+<!-- Export / Screening Report Modal -->
+<div id="modal-export" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modal-exp-title">
+  <div class="modal-glass">
+    <div class="modal-head">
+      <h2 id="modal-exp-title">Export EVS Screening Report</h2>
+      <button type="button" class="modal-close" data-close-modal="modal-export" aria-label="Close modal">&times;</button>
+    </div>
+    <div class="modal-body" id="export-content"></div>
+  </div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="app.js"></script>
 <script src="proximity.js"></script>
+<script src="evs.js"></script>
 </body>
 </html>

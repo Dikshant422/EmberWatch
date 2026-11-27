@@ -4,16 +4,24 @@
 
   // ---------- app state ----------
   const S = {
-    meta: null, regions: null, cells: null,
+    meta: null, regions: null, cells: null, countryGeo: null,
     byId: new Map(),            // region id -> region
     countries: [],              // country regions, A-Z
     statesByIso: new Map(),     // iso_a3 -> state regions, A-Z
     sel: { iso: null, stateId: null },
+    frpBucketFilter: -1,        // -1 = all, 0..4 = specific FRP class
+    tableQuery: "",
+    tableTier: "all",
+    sortKey: "priority_score",  // or "total_frp"
     loadMs: null,
   };
   const $ = (id) => document.getElementById(id);
   const nf = new Intl.NumberFormat("en-US");
+  const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
   const byName = (a, b) => a.localeCompare(b, "en");
+  const esc = (t) => String(t == null ? "" : t).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+  const isDarkTheme = () => document.documentElement.getAttribute("data-theme") === "dark";
 
   // ---------- piece 1: load ----------
   async function getJSON(url) {
@@ -26,7 +34,7 @@
     const t0 = performance.now();
     const [meta, regions, cells, countryGeo] = await Promise.all([
       getJSON("data/meta.json"), getJSON("data/regions.json"), getJSON("data/cells.json"),
-      getJSON("data/borders/countries.json").catch(() => null),   // optional: run make_borders.py once
+      getJSON("data/borders/countries.json").catch(() => null),
     ]);
     S.meta = meta; S.regions = regions; S.cells = cells; S.countryGeo = countryGeo;
     for (const r of regions) {
@@ -42,7 +50,7 @@
     S.loadMs = Math.round(performance.now() - t0);
   }
 
-  // ---------- dropdowns ----------
+  // ---------- dropdowns & URL hash sync ----------
   function option(value, text) {
     const o = document.createElement("option");
     o.value = value; o.textContent = text; return o;
@@ -68,18 +76,45 @@
     sel.disabled = list.length === 0;
   }
 
+  function syncUrlHash() {
+    const params = new URLSearchParams();
+    if (S.sel.iso) params.set("country", S.sel.iso);
+    if (S.sel.stateId) params.set("state", S.sel.stateId);
+    const hash = params.toString();
+    const target = hash ? "#" + hash : window.location.pathname + window.location.search;
+    history.replaceState(null, "", target);
+  }
+
+  function applyHashOnBoot() {
+    if (!window.location.hash) return;
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const iso = params.get("country");
+    const stateId = params.get("state");
+    if (iso && S.byId.has(iso)) {
+      $("sel-country").value = iso;
+      S.sel.iso = iso;
+      fillStates(iso);
+      if (stateId && S.byId.has(stateId)) {
+        $("sel-state").value = stateId;
+        S.sel.stateId = stateId;
+      }
+    }
+  }
+
   function onCountry() {
     const iso = $("sel-country").value || null;
     S.sel = { iso, stateId: null };
     fillStates(iso);
-    renderSelection();
-  }
-  function onState() {
-    S.sel.stateId = $("sel-state").value || null;
+    syncUrlHash();
     renderSelection();
   }
 
-  // Current selection as a region record (or null = world).
+  function onState() {
+    S.sel.stateId = $("sel-state").value || null;
+    syncUrlHash();
+    renderSelection();
+  }
+
   function currentRegion() {
     if (S.sel.stateId) return S.byId.get(S.sel.stateId);
     if (S.sel.iso) return S.byId.get(S.sel.iso);
@@ -90,9 +125,10 @@
     const r = currentRegion();
     $("selection-readout").textContent = r
       ? (r.level === "state" ? r.state + ", " + r.country : r.country) +
-        ": " + nf.format(r.fire_count) + " fire detections"
-      : "World: " + nf.format(S.meta.rows.kept) + " fire detections";
+        " · " + nf.format(r.fire_count) + " fire detections"
+      : "World · " + nf.format(S.meta.rows.kept) + " fire detections";
     if (map) { drawBorders(); drawCells(); }
+    renderKPIs();
     renderTable();
     renderChart();
     renderSummary();
@@ -111,60 +147,130 @@
       " If you opened index.html directly, serve the folder instead: python -m http.server, then open http://localhost:8000";
   }
 
+  // ---------- KPI Hero Strip ----------
+  function buildSparklineSVG(series) {
+    if (!series || !series.length) return "";
+    const vals = series.map((d) => d.count);
+    const max = Math.max(1, ...vals);
+    const w = 96, h = 34, pad = 3;
+    const pts = vals.map((v, i) => {
+      const x = pad + (i / Math.max(1, vals.length - 1)) * (w - pad * 2);
+      const y = h - pad - (v / max) * (h - pad * 2);
+      return x.toFixed(1) + "," + y.toFixed(1);
+    }).join(" ");
+    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">' +
+      '<polyline fill="none" stroke="var(--peach)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" points="' + pts + '"/>' +
+      '</svg>';
+  }
+
+  function renderKPIs() {
+    const r = currentRegion();
+    const series = currentSeries();
+    const detEl = $("kpi-detections-val");
+    const frpEl = $("kpi-frp-val");
+    const sigEl = $("kpi-signal-val");
+    [detEl, frpEl, sigEl].forEach((el) => el.classList.remove("skeleton-text"));
+
+    if (r) {
+      detEl.textContent = nf.format(r.fire_count);
+      $("kpi-detections-sub").textContent = (r.level === "state" ? r.state : r.country) + " (" + S.meta.dates.all.length + "d window)";
+      frpEl.textContent = compact.format(Math.round(r.total_frp)) + " MW";
+      const avgFrp = r.fire_count ? (r.total_frp / r.fire_count).toFixed(1) : "0";
+      $("kpi-frp-sub").textContent = "Avg " + avgFrp + " MW per detection";
+
+      $("kpi-signal-lbl").textContent = "Priority & Signal";
+      const pct = r.trend_pct !== null ? " (" + (r.trend_pct > 0 ? "+" : "") + Math.round(r.trend_pct) + "%)" : "";
+      sigEl.textContent = r.trend_flag + pct;
+      $("kpi-signal-sub").textContent = "Rank #" + r.rank + " of " + r.rank_of + " · Score " + r.priority_score.toFixed(1) + " (" + r.tier + ")";
+    } else {
+      const assignedCount = S.countries.reduce((a, c) => a + c.fire_count, 0);
+      const worldFrp = S.countries.reduce((a, c) => a + c.total_frp, 0);
+      const rising = S.countries.filter((c) => c.trend_flag === "Rising").length;
+      const topC = S.countries.slice().sort((a, b) => b.priority_score - a.priority_score)[0];
+
+      detEl.textContent = compact.format(S.meta.rows.kept);
+      $("kpi-detections-sub").textContent = nf.format(assignedCount) + " assigned across " + S.countries.length + " countries";
+      frpEl.textContent = compact.format(Math.round(worldFrp)) + " MW";
+      $("kpi-frp-sub").textContent = "NOAA-20 + NOAA-21 VIIRS 375m";
+
+      $("kpi-signal-lbl").textContent = "Global Escalations";
+      sigEl.textContent = rising + " Rising";
+      $("kpi-signal-sub").textContent = topC ? ("#1 Priority: " + topC.country + " (" + topC.priority_score.toFixed(0) + "/100)") : "World screening";
+    }
+    $("kpi-sparkline").innerHTML = buildSparklineSVG(series);
+  }
 
   // ---------- piece 2: map ----------
-  // PERFORMANCE: cells.json has ~35k rows. One DOM marker per cell would freeze the page, so
-  // every circle is drawn on a single <canvas> (L.canvas), and only the selection is drawn.
-  const EMBER = ["#F59E0B", "#FF7A59", "#EA4335", "#C5221F", "#7A0C22"];  // extension, not in Helix
-  let map, canvas, layer, tip, frpBreaks = [];
+  const EMBER_LIGHT = ["#F59E0B", "#FF7A59", "#EA4335", "#C5221F", "#7A0C22"];
+  const EMBER_DARK  = ["#B8800B", "#E7AB20", "#F08A2B", "#E2503C", "#FFF1C9"];
+  const currentEmber = () => (isDarkTheme() ? EMBER_DARK : EMBER_LIGHT);
+  let map, canvas, layer, landLayer, tip, frpBreaks = [], lastBoundsRows = [];
   const WORLD = [[-52, -140], [72, 160]];
 
   function quantile(sorted, q) { return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]; }
+  const frpBucket = (v) => frpBreaks.filter((b) => v >= b).length;
+  const frpColour = (v) => currentEmber()[frpBucket(v)];
+
+  function landStyle() {
+    return isDarkTheme()
+      ? { color: "#2F4A59", weight: 0.7, fillColor: "#132C3A", fillOpacity: 1 }
+      : { color: "#D8C7B8", weight: 0.8, fillColor: "#EDE4DA", fillOpacity: 1 };
+  }
 
   function initMap() {
     map = L.map("map", { worldCopyJump: true, minZoom: 1, maxZoom: 10, zoomSnap: 0.25, preferCanvas: true })
       .fitBounds(WORLD);
-    // No tile server (CARTO's free tiles now need an API key). Land and borders come from
-    // Natural Earth, simplified by make_borders.py, and are drawn on their own canvas panes.
     map.attributionControl.addAttribution("Boundaries: Natural Earth");
     [["land", 210], ["regions", 220], ["outline", 450]].forEach(([n, z]) => {
       const p = map.createPane(n); p.style.zIndex = z; p.style.pointerEvents = "none";
     });
     if (S.countryGeo) {
-      L.geoJSON(S.countryGeo, {
-        pane: "land", renderer: L.canvas({ pane: "land" }), interactive: false,
-        style: { color: "#D8C7B8", weight: 0.8, fillColor: "#EDE4DA", fillOpacity: 1 },
+      landLayer = L.geoJSON(S.countryGeo, {
+        pane: "land", renderer: L.canvas({ pane: "land" }), interactive: false, style: landStyle(),
       }).addTo(map);
     }
     canvas = L.canvas({ padding: 0.5 });
     tip = L.tooltip({ direction: "top", offset: [0, -6], className: "ew-tip" });
 
-    // Colour classes come from the WORLD cell FRP distribution, so colours mean the same in every view.
     const f = S.cells.cells.map((c) => c[3]).sort((a, b) => a - b);
     frpBreaks = [0.2, 0.5, 0.8, 0.95].map((q) => quantile(f, q));
     renderLegend();
   }
 
-  const frpColour = (v) => EMBER[frpBreaks.filter((b) => v >= b).length];
-
   function renderLegend() {
     const r = (v) => (v < 10 ? v.toFixed(1) : Math.round(v));
     const labels = [
-      "under " + r(frpBreaks[0]),
-      r(frpBreaks[0]) + " to " + r(frpBreaks[1]),
-      r(frpBreaks[1]) + " to " + r(frpBreaks[2]),
-      r(frpBreaks[2]) + " to " + r(frpBreaks[3]),
+      "< " + r(frpBreaks[0]),
+      r(frpBreaks[0]) + "–" + r(frpBreaks[1]),
+      r(frpBreaks[1]) + "–" + r(frpBreaks[2]),
+      r(frpBreaks[2]) + "–" + r(frpBreaks[3]),
       r(frpBreaks[3]) + "+",
     ];
+    const palette = currentEmber();
+    const chips = ['<button type="button" class="lg-chip" data-bucket="-1" aria-pressed="' + (S.frpBucketFilter === -1) + '">All</button>']
+      .concat(palette.map((c, i) =>
+        '<button type="button" class="lg-chip" data-bucket="' + i + '" aria-pressed="' + (S.frpBucketFilter === i) + '">' +
+        '<i style="background:' + c + '"></i>' + labels[i] + '</button>'
+      )).join("");
+
     $("map-legend").innerHTML =
-      '<div class="lg-title">Cell colour: total FRP (MW)</div>' +
-      '<div class="lg-row">' +
-      EMBER.map((c, i) => '<span class="lg-item"><i style="background:' + c + '"></i>' + labels[i] + "</span>").join("") +
-      "</div>" +
-      '<div class="lg-note">Each circle is one 0.25&deg; grid cell (about 28 km). Bigger circle = more detections.</div>';
+      '<div class="lg-head"><span class="lg-title">Total FRP (MW) · Click to filter</span>' +
+      '<span class="lg-hint">Click any cell to inspect smoke</span></div>' +
+      '<div class="lg-row">' + chips + "</div>" +
+      '<div class="lg-note">0.25&deg; grid cell (~28 km). Circle radius scales with detection count.</div>';
   }
 
-  // Indices into cells.json for the current selection (-1 means "no filter").
+  function wireLegend() {
+    $("map-legend").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-bucket]");
+      if (!btn) return;
+      const b = parseInt(btn.dataset.bucket, 10);
+      S.frpBucketFilter = (S.frpBucketFilter === b && b !== -1) ? -1 : b;
+      renderLegend();
+      drawCells(false);
+    });
+  }
+
   function selectionIdx() {
     const { iso, stateId } = S.sel;
     return {
@@ -173,9 +279,7 @@
     };
   }
 
-
   // ---------- borders for the selection ----------
-  // Selected country: its states/provinces are outlined. Selected state: filled amber outline.
   const a1Cache = new Map();
   let borderLayers = [], borderToken = 0;
   async function getAdmin1(iso) {
@@ -189,27 +293,35 @@
     const { iso, stateId } = S.sel;
     if (!iso || !S.countryGeo) return;
     const a1 = await getAdmin1(iso);
-    if (token !== borderToken) return;                 // selection changed while loading
+    if (token !== borderToken) return;
     const add = (data, pane, style) => borderLayers.push(
       L.geoJSON(data, { pane, renderer: L.canvas({ pane }), interactive: false, style }).addTo(map));
-    if (a1) add(a1, "regions", { color: "#CBB7A6", weight: 0.9, fillColor: "#E5DAD0", fillOpacity: 1 });
+
+    const dark = isDarkTheme();
+    if (a1) add(a1, "regions", dark
+      ? { color: "#7FA3B3", weight: 0.9, fillColor: "#1D4152", fillOpacity: 1 }
+      : { color: "#CBB7A6", weight: 0.9, fillColor: "#E5DAD0", fillOpacity: 1 });
     add(S.countryGeo.features.filter((f) => f.properties.id === iso), "outline",
-      { color: "#2A221E", weight: 1.5, opacity: 0.7, fill: false });
+      { color: dark ? "#EDF4F7" : "#2A211D", weight: 1.5, opacity: 0.72, fill: false });
     const st = stateId && a1 && a1.features.find((f) => f.properties.id === stateId);
-    if (st) add(st, "outline", { color: "#FF6F59", weight: 2.5, fillColor: "#FF6F59", fillOpacity: 0.12 });
+    if (st) add(st, "outline",
+      { color: "#FF6F59", weight: 2.5, fillColor: "#FF6F59", fillOpacity: 0.14 });
   }
 
-  function drawCells() {
+  function drawCells(fitView = true) {
     const t0 = performance.now();
     const { c, s } = selectionIdx();
-    const rows = S.cells.cells.filter((r) => (s >= 0 ? r[5] === s : c >= 0 ? r[4] === c : true));
-    rows.sort((a, b) => a[3] - b[3]);                     // hottest drawn last = on top
-    const scale = s >= 0 ? 1.4 : c >= 0 ? 1.0 : 0.42;     // fewer cells -> bigger circles
+    let rows = S.cells.cells.filter((r) => (s >= 0 ? r[5] === s : c >= 0 ? r[4] === c : true));
+    if (S.frpBucketFilter >= 0) {
+      rows = rows.filter((r) => frpBucket(r[3]) === S.frpBucketFilter);
+    }
+    rows.sort((a, b) => a[3] - b[3]);
+    const scale = s >= 0 ? 1.4 : c >= 0 ? 1.0 : 0.44;
     if (layer) layer.remove();
     layer = L.featureGroup();
     for (const r of rows) {
       const m = L.circleMarker([r[0], r[1]], {
-        renderer: canvas, stroke: false, fillOpacity: 0.78, fillColor: frpColour(r[3]),
+        renderer: canvas, stroke: false, fillOpacity: 0.80, fillColor: frpColour(r[3]),
         radius: Math.min(11, (2 + 1.1 * Math.sqrt(r[2])) * scale),
       });
       m.cell = r;
@@ -218,27 +330,41 @@
     layer.on("mouseover", (e) => {
       const r = e.layer.cell;
       tip.setLatLng(e.latlng).setContent(
-        "<strong>" + nf.format(r[2]) + " fire detections</strong><br>" + nf.format(Math.round(r[3])) + " MW total FRP");
+        "<strong>" + nf.format(r[2]) + " fire detections</strong><br>" +
+        nf.format(Math.round(r[3])) + " MW total FRP<br>" +
+        "<span style='opacity:0.75;font-size:11px'>Click cell for live smoke &amp; weather</span>"
+      );
       tip.addTo(map);
     });
     layer.on("mouseout", () => tip.remove());
+    layer.on("click", (e) => {
+      L.DomEvent.stopPropagation(e);
+      const r = e.layer.cell;
+      const cName = r[4] >= 0 ? S.cells.countries[r[4]] : "Unassigned";
+      const sName = r[5] >= 0 ? S.cells.states[r[5]].replace(/^[^|]+\|/, "") : cName;
+      document.dispatchEvent(new CustomEvent("ew-cell-inspect", {
+        detail: { lat: r[0], lon: r[1], count: r[2], frp: r[3], label: sName + " cell", cell: r }
+      }));
+    });
     layer.addTo(map);
 
-    if (rows.length) {
-      let [la0, la1, lo0, lo1] = [90, -90, 180, -180];
-      for (const r of rows) { la0 = Math.min(la0, r[0]); la1 = Math.max(la1, r[0]); lo0 = Math.min(lo0, r[1]); lo1 = Math.max(lo1, r[1]); }
-      if (c < 0 && s < 0) map.fitBounds(WORLD, { animate: false });
-      else map.fitBounds([[la0 - 0.3, lo0 - 0.3], [la1 + 0.3, lo1 + 0.3]], { padding: [24, 24], maxZoom: 8, animate: false });
-    }
+    lastBoundsRows = rows;
+    if (fitView && rows.length) fitCurrentBounds();
     S.lastDraw = { cells: rows.length, ms: Math.round(performance.now() - t0) };
-    console.log("map: drew " + rows.length + " cells in " + S.lastDraw.ms + " ms");
   }
 
+  function fitCurrentBounds() {
+    const { c, s } = selectionIdx();
+    if (c < 0 && s < 0) { map.fitBounds(WORLD, { animate: true }); return; }
+    const rows = lastBoundsRows.length ? lastBoundsRows : S.cells.cells.filter((r) => (s >= 0 ? r[5] === s : r[4] === c));
+    if (!rows.length) { map.fitBounds(WORLD, { animate: true }); return; }
+    let [la0, la1, lo0, lo1] = [90, -90, 180, -180];
+    for (const r of rows) { la0 = Math.min(la0, r[0]); la1 = Math.max(la1, r[0]); lo0 = Math.min(lo0, r[1]); lo1 = Math.max(lo1, r[1]); }
+    map.fitBounds([[la0 - 0.3, lo0 - 0.3], [la1 + 0.3, lo1 + 0.3]], { padding: [26, 26], maxZoom: 8, animate: true });
+  }
 
   // ---------- piece 3: priority table ----------
-  S.sortKey = "priority_score";   // or "total_frp"
-  const esc = (t) => String(t).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-  const SIGNAL = {                // word + arrow + colour, never colour alone
+  const SIGNAL = {
     "Rising": { arrow: "↑", cls: "up" },
     "Stable": { arrow: "→", cls: "flat" },
     "Falling": { arrow: "↓", cls: "down" },
@@ -253,12 +379,17 @@
     return '<span class="sig ' + g.cls + '"><b aria-hidden="true">' + g.arrow + "</b> " + esc(r.trend_flag) + pct + "</span>";
   }
 
-  // Rows shown: all countries worldwide, or the states of the selected country.
   function tableRows() {
-    const rows = (S.sel.iso ? S.statesByIso.get(S.sel.iso) || [] : S.countries).slice();
+    let rows = (S.sel.iso ? S.statesByIso.get(S.sel.iso) || [] : S.countries).slice();
     const k = S.sortKey, other = k === "total_frp" ? "priority_score" : "total_frp";
-    // last tie-break = pipeline rank, so the table order matches the "Ranks #N" text in each summary
     rows.sort((a, b) => b[k] - a[k] || b[other] - a[other] || a.rank - b.rank);
+    if (S.tableTier !== "all") {
+      rows = rows.filter((r) => r.tier === S.tableTier);
+    }
+    if (S.tableQuery.trim()) {
+      const q = S.tableQuery.trim().toLowerCase();
+      rows = rows.filter((r) => ((r.level === "state" ? r.state : r.country) || "").toLowerCase().includes(q));
+    }
     return rows;
   }
 
@@ -266,21 +397,24 @@
     const rows = tableRows();
     const iso = S.sel.iso, country = iso ? S.byId.get(iso) : null;
     $("table-title").textContent = country
-      ? "States and provinces in " + country.country + " with fire detections"
+      ? "States & provinces in " + country.country
       : "Countries ranked worldwide";
+    $("table-quick-filters").hidden = false;
+
     const th = (key, label, cls) => '<th scope="col" class="' + cls + (S.sortKey === key ? " sorted" : "") + '"' +
       (S.sortKey === key ? ' aria-sort="descending"' : "") + ">" + label + "</th>";
     let h = '<div class="table-tools"><div class="seg" role="group" aria-label="Sort the table by">' +
-      '<span class="seg-label">Sort by</span>' +
+      '<span class="seg-label">Sort</span>' +
       ["priority_score", "total_frp"].map((k) =>
         '<button type="button" data-sort="' + k + '" aria-pressed="' + (S.sortKey === k) + '">' +
         (k === "priority_score" ? "Priority score" : "Total FRP") + "</button>").join("") +
-      '</div><span class="count">' + rows.length + (iso ? " states or provinces" : " countries") + "</span></div>";
+      '</div><span class="count">' + rows.length + (iso ? " states/provinces" : " countries") + "</span></div>";
+
     if (!rows.length) {
-      h += '<p class="muted">No state-level detections for this country. Detections here count at country level only.</p>';
+      h += '<p class="muted">No matching regions for the active filter.</p>';
     } else {
-      h += '<p class="scrollhint">Swipe the table sideways to see Priority score and Short-term signal.</p><div class="tscroll" id="tscroll" tabindex="0" role="region" aria-label="Priority table, scrollable"><table class="ptable"><thead><tr>' +
-        '<th scope="col" class="num rk">Rank</th><th scope="col">Region</th>' +
+      h += '<p class="scrollhint">Swipe table sideways to see all columns.</p><div class="tscroll" id="tscroll" tabindex="0" role="region" aria-label="Priority table"><table class="ptable"><thead><tr>' +
+        '<th scope="col" class="num rk">#</th><th scope="col">Region</th>' +
         '<th scope="col" class="num det">Detections</th>' +
         th("total_frp", "Total FRP (MW)", "num") + th("priority_score", "Priority score", "num") +
         '<th scope="col">Short-term signal</th></tr></thead><tbody>';
@@ -299,7 +433,6 @@
     }
     $("table-body").innerHTML = h;
 
-    // keep the selected row visible inside the scroll box (without scrolling the page)
     const box = $("tscroll"), on = box && box.querySelector("tr.on");
     if (on) box.scrollTop = Math.max(0, on.offsetTop - box.clientHeight / 2);
   }
@@ -308,30 +441,48 @@
     const r = S.byId.get(id);
     if (!r) return;
     if (r.level === "country") {
-      $("sel-country").value = r.iso_a3; onCountry();
+      $("sel-country").value = r.iso_a3;
+      S.sel = { iso: r.iso_a3, stateId: null };
+      fillStates(r.iso_a3);
     } else {
-      $("sel-state").value = r.id; onState();
+      $("sel-country").value = r.iso_a3;
+      S.sel = { iso: r.iso_a3, stateId: r.id };
+      fillStates(r.iso_a3);
+      $("sel-state").value = r.id;
     }
+    syncUrlHash();
+    renderSelection();
   }
 
   function wireTable() {
-    const body = $("table-body");
-    body.addEventListener("click", (e) => {
+    $("table-body").addEventListener("click", (e) => {
       const sortBtn = e.target.closest("button[data-sort]");
       if (sortBtn) { S.sortKey = sortBtn.dataset.sort; renderTable(); return; }
       const row = e.target.closest("tr[data-id]");
       if (row) pickRegion(row.dataset.id);
     });
-  }
 
+    $("table-filter-input").addEventListener("input", (e) => {
+      S.tableQuery = e.target.value;
+      renderTable();
+    });
+
+    $("table-quick-filters").addEventListener("click", (e) => {
+      const pill = e.target.closest("button[data-tier]");
+      if (!pill) return;
+      S.tableTier = pill.dataset.tier;
+      document.querySelectorAll(".tier-pill").forEach((b) =>
+        b.setAttribute("aria-pressed", b === pill ? "true" : "false")
+      );
+      renderTable();
+    });
+  }
 
   // ---------- piece 4: daily chart ----------
   let chart;
-  const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
   const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const dayLabel = (d) => MON[+d.slice(5, 7) - 1] + " " + d.slice(8, 10);
 
-  // Series for the selection. World = sum of all country series (Unassigned is not in regions.json).
   function currentSeries() {
     const r = currentRegion();
     if (r) return r.series;
@@ -345,45 +496,56 @@
 
   function renderChart() {
     const body = $("chart-body");
-    if (typeof Chart === "undefined") { body.innerHTML = '<p class="muted">Chart.js did not load (check your internet connection).</p>'; return; }
+    if (typeof Chart === "undefined") {
+      body.innerHTML = '<p class="muted">Chart.js did not load (check internet connection).</p>'; return;
+    }
     const r = currentRegion();
     const name = r ? (r.level === "state" ? r.state + ", " + r.country : r.country) : "World (detections assigned to a country)";
     const series = currentSeries();
     const partial = new Set(S.meta.dates.partial);
     const isPart = (i) => partial.has(series[i].date);
+    const dark = isDarkTheme();
 
-    if (!chart) {
+    if (!chart || !$("chart")) {
       body.innerHTML = '<p class="chart-sub" id="chart-sub"></p><div class="chart-box"><canvas id="chart" role="img"></canvas></div>';
-      Chart.defaults.color = "#6B5B54";
-      Chart.defaults.font.family = '"Satoshi", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
     }
+    Chart.defaults.color = dark ? "#9FB8C6" : "#685850";
+    Chart.defaults.font.family = '"Satoshi", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+
     $("chart-sub").textContent = name;
     $("chart").setAttribute("aria-label", "Daily fire detections and total FRP for " + name);
 
     const dash = (ctx) => (isPart(ctx.p1DataIndex) ? [6, 5] : undefined);
+    const hollowBg = dark ? "#122734" : "#FFFFFF";
     const mk = (label, key, colour, axis, shape) => ({
       label, data: series.map((p) => p[key]), yAxisID: axis,
-      borderColor: colour, backgroundColor: colour, borderWidth: 2.5, tension: 0.1,
+      borderColor: colour, backgroundColor: colour, borderWidth: 2.5, tension: 0.15,
       pointStyle: shape, pointRadius: 5, pointHoverRadius: 7,
-      pointBackgroundColor: (c) => (isPart(c.dataIndex) ? "#FFFFFF" : colour),   // hollow = partial
+      pointBackgroundColor: (c) => (isPart(c.dataIndex) ? hollowBg : colour),
       pointBorderColor: colour, pointBorderWidth: 2,
       segment: { borderDash: dash },
     });
+    const gridCol = dark ? "rgba(78, 118, 138, 0.35)" : "rgba(225, 200, 186, 0.55)";
+    const countCol = dark ? "#FF8266" : "#E04B35";
+    const frpCol   = dark ? "#57B8BE" : "#217A79";
+
     const data = {
       labels: series.map((p, i) => (isPart(i) ? [p.date.slice(8), MON[+p.date.slice(5, 7) - 1], "partial"] : [p.date.slice(8), MON[+p.date.slice(5, 7) - 1]])),
       datasets: [
-        mk("Fire detections", "count", "#FF6F59", "yCount", "circle"),
-        mk("Total FRP (MW)", "frp", "#2A8382", "yFrp", "rectRot"),
+        mk("Fire detections", "count", countCol, "yCount", "circle"),
+        mk("Total FRP (MW)", "frp", frpCol, "yFrp", "rectRot"),
       ],
     };
     const options = {
       responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      animation: matchMedia("(prefers-reduced-motion: reduce)").matches ? false : { duration: 250 },
+      animation: matchMedia("(prefers-reduced-motion: reduce)").matches ? false : { duration: 240 },
       plugins: {
-        legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 10, padding: 16, color: "#6B5B54" } },
+        legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 10, padding: 14, color: dark ? "#9FB8C6" : "#685850" } },
         tooltip: {
-          backgroundColor: "rgba(255, 252, 248, 0.96)", borderColor: "rgba(255, 111, 89, 0.4)", borderWidth: 1,
-          titleColor: "#2A221E", bodyColor: "#2A221E", padding: 12, cornerRadius: 10,
+          backgroundColor: dark ? "rgba(13, 30, 40, 0.96)" : "rgba(255, 252, 248, 0.96)",
+          borderColor: "rgba(255, 111, 89, 0.4)", borderWidth: 1,
+          titleColor: dark ? "#FFF" : "#1B1411", bodyColor: dark ? "#E9F1F5" : "#2A211D",
+          padding: 10, cornerRadius: 10,
           callbacks: {
             title: (it) => series[it[0].dataIndex].date + (isPart(it[0].dataIndex) ? " (partial day, UTC)" : " (UTC)"),
             label: (c) => " " + c.dataset.label + ": " + nf.format(Math.round(c.parsed.y)),
@@ -391,19 +553,18 @@
         },
       },
       scales: {
-        x: { grid: { color: "rgba(235, 215, 202, 0.5)" }, ticks: { maxRotation: 0, autoSkip: false, font: { size: 11 }, color: "#6B5B54" } },
-        yCount: { position: "left", beginAtZero: true, grid: { color: "rgba(235, 215, 202, 0.5)" }, ticks: { color: "#D63923", callback: (v) => compact.format(v) },
-                  title: { display: true, text: "Detections", color: "#D63923" } },
-        yFrp: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { color: "#2A8382", callback: (v) => compact.format(v) },
-                title: { display: true, text: "FRP (MW)", color: "#2A8382" } },
+        x: { grid: { color: gridCol }, ticks: { maxRotation: 0, autoSkip: false, font: { size: 11 } } },
+        yCount: { position: "left", beginAtZero: true, grid: { color: gridCol }, ticks: { color: countCol, callback: (v) => compact.format(v) },
+                  title: { display: true, text: "Detections", color: countCol } },
+        yFrp: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { color: frpCol, callback: (v) => compact.format(v) },
+                title: { display: true, text: "FRP (MW)", color: frpCol } },
       },
     };
     if (chart) chart.destroy();
     chart = new Chart($("chart"), { type: "line", data, options });
   }
 
-
-  // ---------- piece 5: summary box (bullets) ----------
+  // ---------- piece 5: summary box ----------
   const rng = (a) => (a.length ? dayLabel(a[0]) + (a.length > 1 ? " to " + dayLabel(a[a.length - 1]) : "") : "n/a");
   const li = (label, text) => "<li><b>" + label + ":</b> " + text + "</li>";
 
@@ -427,23 +588,144 @@
         li("Short-term signal", esc(signalText(r, m))) +
         li("Priority", "#" + r.rank + " of " + r.rank_of + " " + where + " (score " + r.priority_score.toFixed(1) +
           ' of 100, <span class="tier t-' + r.tier.toLowerCase() + '">' + r.tier + "</span>)") +
-        li("Period", period) + "</ul>" +
-        '<h3>Suggested checks</h3><ul class="checks">' + r.suggested_checks.map((t) => "<li>" + esc(t) + "</li>").join("") + "</ul>";
+        li("Period", period) + "</ul>";
     } else {
       const n = { Rising: 0, Stable: 0, Falling: 0, "Insufficient data": 0 };
       S.countries.forEach((c) => { n[c.trend_flag]++; });
       const top = (k) => S.countries.slice().sort((a, b) => b[k] - a[k] || a.rank - b.rank).slice(0, 3).map((c) => c.country).join(", ");
       const assigned = S.countries.reduce((a, c) => a + c.fire_count, 0);
-      h = '<p class="sum-name">World</p><ul class="facts">' +
+      h = '<p class="sum-name">World Overview</p><ul class="facts">' +
         li("Fire detections", nf.format(assigned) + " assigned to a country") +
-        li("Not assigned to any region", nf.format(m.unassigned.country_count) + " (" + m.unassigned.country_share_pct + "%)") +
-        li("Short-term signal", n.Rising + " Rising, " + n.Stable + " Stable, " + n.Falling + " Falling, " + n["Insufficient data"] + " Insufficient data (" + S.countries.length + " countries)") +
-        li("Highest priority score", esc(top("priority_score"))) +
+        li("Not assigned", nf.format(m.unassigned.country_count) + " (" + m.unassigned.country_share_pct + "%)") +
+        li("Short-term signal", n.Rising + " Rising, " + n.Stable + " Stable, " + n.Falling + " Falling, " + n["Insufficient data"] + " Insufficient data") +
+        li("Highest priority", esc(top("priority_score"))) +
         li("Highest total FRP", esc(top("total_frp"))) +
         li("Period", period) + "</ul>" +
-        '<p class="muted">Choose a country, then a state or province, to see its summary and suggested checks.</p>';
+        '<p class="muted" style="font-size:13px">Select a country or state, or click any map circle to inspect live air quality &amp; smoke drift.</p>';
     }
     $("summary-body").innerHTML = h;
+  }
+
+  // ---------- Unified Command Search ----------
+  function wireCommandSearch() {
+    const input = $("cmd-search-input");
+    const drop = $("cmd-search-results");
+    let currentMatches = [];
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      } else if (e.key === "Escape") {
+        drop.hidden = true;
+      }
+    });
+
+    function renderDropdown() {
+      const q = input.value.trim();
+      if (!q) { drop.hidden = true; return; }
+      const ql = q.toLowerCase();
+      currentMatches = [];
+      for (const r of S.regions) {
+        const label = r.level === "state" ? (r.state + ", " + r.country) : r.country;
+        if (label.toLowerCase().includes(ql)) {
+          currentMatches.push({ type: "region", id: r.id, label, sub: r.level === "state" ? "State · #" + r.rank : "Country · #" + r.rank, score: r.fire_count });
+        }
+      }
+      currentMatches.sort((a, b) => b.score - a.score);
+      currentMatches = currentMatches.slice(0, 7);
+
+      let html = currentMatches.map((m, idx) =>
+        '<button type="button" class="cmd-item" data-idx="' + idx + '">' +
+        '<span>' + esc(m.label) + '</span>' +
+        '<span class="cmd-item-tag">' + esc(m.sub) + '</span></button>'
+      ).join("");
+      html += '<button type="button" class="cmd-item cmd-item-osm" data-osm="' + esc(q) + '">' +
+        '<span>Screen place "' + esc(q) + '" in Proximity Check</span>' +
+        '<span class="cmd-item-tag">OSM Search</span></button>';
+      drop.innerHTML = html;
+      drop.hidden = false;
+    }
+
+    input.addEventListener("input", renderDropdown);
+    input.addEventListener("focus", () => { if (input.value.trim()) renderDropdown(); });
+
+    drop.addEventListener("click", (e) => {
+      const btn = e.target.closest(".cmd-item");
+      if (!btn) return;
+      if (btn.dataset.osm) {
+        const query = btn.dataset.osm;
+        drop.hidden = true;
+        input.value = "";
+        document.dispatchEvent(new CustomEvent("ew-jump-place", { detail: { query } }));
+      } else if (btn.dataset.idx !== undefined) {
+        const item = currentMatches[parseInt(btn.dataset.idx, 10)];
+        drop.hidden = true;
+        input.value = "";
+        if ($("btn-mode-proximity").getAttribute("aria-pressed") === "true") {
+          $("btn-mode-region").click();
+        }
+        pickRegion(item.id);
+      }
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !drop.hidden) {
+        e.preventDefault();
+        const first = drop.querySelector(".cmd-item");
+        if (first) first.click();
+      }
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".cmd-search-wrap")) drop.hidden = true;
+    });
+  }
+
+  // ---------- Inspector Tabs & Theme Toggle ----------
+  function activateTab(tabId) {
+    const mapTab = {
+      "tab-btn-overview": "pane-overview",
+      "tab-btn-evs": "pane-evs",
+      "tab-btn-checks": "pane-checks",
+    };
+    Object.entries(mapTab).forEach(([btnId, paneId]) => {
+      const on = btnId === tabId;
+      $(btnId).setAttribute("aria-selected", on ? "true" : "false");
+      $(paneId).hidden = !on;
+    });
+  }
+
+  function wireTabsAndTheme() {
+    document.querySelector(".inspector-tabs").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[role='tab']");
+      if (btn) activateTab(btn.id);
+    });
+
+    const saved = localStorage.getItem("ew-theme") || "peach";
+    applyTheme(saved, false);
+
+    $("btn-theme-toggle").addEventListener("click", () => {
+      const next = isDarkTheme() ? "peach" : "dark";
+      applyTheme(next, true);
+    });
+
+    $("btn-fit-world").addEventListener("click", () => fitCurrentBounds());
+  }
+
+  function applyTheme(theme, redraw) {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("ew-theme", theme);
+    $("icon-theme-moon").hidden = (theme === "dark");
+    $("icon-theme-sun").hidden = (theme !== "dark");
+    if (redraw && map) {
+      if (landLayer) landLayer.setStyle(landStyle());
+      drawBorders();
+      renderLegend();
+      if ($("btn-mode-proximity").getAttribute("aria-pressed") !== "true") drawCells(false);
+      renderChart();
+    }
   }
 
   // ---------- boot ----------
@@ -453,16 +735,26 @@
     } catch (e) { showError(e); console.error(e); return; }
     fillCountries();
     fillStates(null);
+    applyHashOnBoot();
     if (!S.countryGeo) {
-      showWarn("Map borders not found (data/borders/countries.json). Copy the data/borders folder from the zip into your project's data folder, " +
-        "or run: python make_borders.py. Then hard-refresh the page (Ctrl+Shift+R).");
+      showWarn("Map borders not found (data/borders/countries.json). Run python make_borders.py and refresh.");
     }
     initMap();
+    wireLegend();
+    wireTabsAndTheme();
+    wireCommandSearch();
     $("sel-country").addEventListener("change", onCountry);
     $("sel-state").addEventListener("change", onState);
     wireTable();
     renderSelection();
-    window.EW = { S, nf, $, currentRegion, frpColour, drawCells, get map() { return map; }, get canvas() { return canvas; }, get layer() { return layer; }, set layer(l) { layer = l; } };   // shared with later pieces + tests
+
+    window.EW = {
+      S, nf, compact, esc, $, currentRegion, currentSeries, frpColour, frpBreaks,
+      drawCells, drawBorders, pickRegion, tableRows, activateTab, renderSelection,
+      get EMBER() { return currentEmber(); },
+      get map() { return map; }, get canvas() { return canvas; },
+      get layer() { return layer; }, set layer(l) { layer = l; },
+    };
     document.dispatchEvent(new Event("ew-ready"));
   }
   init();

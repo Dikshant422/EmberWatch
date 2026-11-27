@@ -371,8 +371,8 @@
 
     if (!P.point && P.waypoints.length === 0) {
       readout.textContent = P.submode === "point"
-        ? "Proximity Check: Click anywhere on the map or search a place to screen."
-        : "Corridor Check: Click to add waypoints or search places along your route.";
+        ? "Proximity Check · Click map or search place to screen"
+        : "Corridor Check · Add waypoints or search places along route";
 
       box.innerHTML =
         '<p class="sum-name">Proximity Screening</p>' +
@@ -380,12 +380,17 @@
         (P.submode === "point"
           ? "Click on the map or type a place name above to inspect fire detections within your chosen radius."
           : "Click 2 or more points on the map to define your transit corridor, or enter cities above.") +
-        '</p>' +
-        '<h3>Suggested checks</h3>' +
-        '<ul class="checks">' +
-        '<li>Verify with local road authorities or maps before traveling through active detection zones.</li>' +
-        '<li>Check weather and wind conditions for potential smoke drift.</li>' +
-        '</ul>';
+        '</p>';
+
+      document.dispatchEvent(new CustomEvent("ew-proximity-result", {
+        detail: {
+          result: { matches: [], totalFRP: 0, totalDetections: 0, nearestKm: null },
+          verdict: { label: "Ready", cls: "verdict-low", desc: "Select a location or route to screen" },
+          bufferKm: P.bufferKm,
+          label: "Proximity",
+          target: null,
+        }
+      }));
       return;
     }
 
@@ -393,15 +398,30 @@
     const verdict = getVerdict(res.totalFRP);
 
     let titleText = "";
+    let inspectTarget = null;
     if (P.submode === "point") {
       titleText = "Point Radius (" + P.bufferKm + " km)";
       readout.textContent = "Point: " + (P.point.label || (P.point.lat.toFixed(2) + "°, " + P.point.lon.toFixed(2) + "°")) +
         " · " + nf.format(res.totalDetections) + " fire detections within " + P.bufferKm + " km";
+      inspectTarget = {
+        lat: P.point.lat, lon: P.point.lon,
+        label: P.point.label || "Selected Pin",
+        count: res.totalDetections, frp: res.totalFRP
+      };
     } else {
       const distInfo = P.roadDistanceKm ? " (~" + P.roadDistanceKm + " km road)" : " (" + P.waypoints.length + " waypoints)";
       titleText = "Corridor" + distInfo;
       readout.textContent = "Corridor (" + P.bufferKm + " km buffer): " + nf.format(res.totalDetections) +
         " fire detections · " + nf.format(res.totalFRP) + " MW FRP";
+      const pts = P.roadPoints || P.waypoints;
+      const mid = pts[Math.floor(pts.length / 2)];
+      if (mid) {
+        inspectTarget = {
+          lat: mid.lat, lon: mid.lon,
+          label: "Route Midpoint",
+          count: res.totalDetections, frp: res.totalFRP
+        };
+      }
     }
 
     let h = '<p class="sum-name">' + esc(titleText) + '</p>';
@@ -430,20 +450,11 @@
       h += '</tbody></table>';
     }
 
-    h += '<h3>Suggested checks</h3><ul class="checks">';
-    if (res.totalFRP > 5000) {
-      h += '<li>High fire detections present along corridor. Check visibility, road advisories, and detour options.</li>';
-      h += '<li>Detections include agricultural, industrial, and wildland heat sources; inspect cell clusters on the map.</li>';
-    } else if (res.totalFRP > 0) {
-      h += '<li>Monitor detections on upcoming satellite passes for changes in intensity.</li>';
-      h += '<li>Check local news and transport department alerts for the relevant highways.</li>';
-    } else {
-      h += '<li>Buffer corridor is currently clear in the 7-day satellite screening window.</li>';
-      h += '<li>Remember: satellite passes occur a few times daily; cloud cover or rapid developments may hide new fires.</li>';
-    }
-    h += '</ul>';
-
     box.innerHTML = h;
+
+    document.dispatchEvent(new CustomEvent("ew-proximity-result", {
+      detail: { result: res, verdict, bufferKm: P.bufferKm, label: titleText, target: inspectTarget }
+    }));
   }
 
   function renderProximityTable() {
@@ -451,6 +462,9 @@
     const body = EW.$("table-body");
     const title = EW.$("table-title");
     if (!body || !title) return;
+
+    const qf = EW.$("table-quick-filters");
+    if (qf) qf.hidden = true;
 
     title.textContent = P.submode === "point"
       ? "Fire detection cells near selected location"
@@ -525,17 +539,8 @@
 
     clearProximityGraphics();
 
-    // Restore normal map cells & selection panels
-    EW.drawCells();
-    const cur = EW.currentRegion();
-    if (cur) {
-      EW.$("selection-readout").textContent = (cur.level === "state" ? cur.state + ", " + cur.country : cur.country) +
-        ": " + nf.format(cur.fire_count) + " fire detections";
-    } else {
-      EW.$("selection-readout").textContent = "World: " + nf.format(EW.S.meta.rows.kept) + " fire detections";
-    }
-    // Re-render original panels by dispatching change
-    document.dispatchEvent(new CustomEvent("selectionchange", { detail: { region: cur, sel: EW.S.sel } }));
+    // Restore normal map cells, KPIs, priority table & selection panels
+    EW.renderSelection();
   }
 
   function setSubmode(mode) {
@@ -671,6 +676,16 @@
     // Snap to road & Clear
     EW.$("btn-snap-road").addEventListener("click", handleSnapRoad);
     EW.$("btn-clear-proximity").addEventListener("click", handleClear);
+
+    // Unified command search OSM jump
+    document.addEventListener("ew-jump-place", (e) => {
+      const q = e.detail && e.detail.query;
+      if (!q) return;
+      if (!P.active) activateProximityMode();
+      setSubmode("point");
+      EW.$("input-place-search").value = q;
+      handleSearch();
+    });
 
     console.log("proximity.js initialized successfully.");
   }
